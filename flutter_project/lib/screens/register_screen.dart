@@ -28,8 +28,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
       final user = res.user;
 
       if (user != null) {
+        // Insert profile into public.users table
         await client.from('users').insert({
-          'id': user.id,
+          'auth_id': user.id, // Corrected: was 'id'
           'username': _usernameController.text.trim(),
           'email': _emailController.text.trim(),
           'display_name': _displayNameController.text.trim(),
@@ -42,7 +43,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         if (mounted) {
           showDialog(
             context: context,
-            barrierDismissible: false, // User must tap button to dismiss
+            barrierDismissible: false,
             builder: (BuildContext context) {
               return AlertDialog(
                 title: Text('Success'),
@@ -61,10 +62,32 @@ class _RegisterScreenState extends State<RegisterScreen> {
           );
         }
       } else {
+        // Handle case where email confirmation is required
         setState(() {
-          error = 'Unable to register. Please check your details.';
           loading = false;
         });
+
+        if (mounted) {
+           showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (BuildContext context) {
+              return AlertDialog(
+                title: Text('Registration Sent'),
+                content: Text('Please check your email to complete registration.'),
+                actions: <Widget>[
+                  TextButton(
+                    child: Text('OK'),
+                    onPressed: () {
+                      Navigator.of(context).pop(); // Dismiss dialog
+                      Navigator.of(context).pop(); // Return to login screen
+                    },
+                  ),
+                ],
+              );
+            },
+          );
+        }
       }
     } on AuthException catch (e) {
       setState(() {
@@ -73,7 +96,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
       });
     } catch (e) {
       setState(() {
-        error = 'An unexpected error occurred.';
+        // Provide more detailed error information
+        error = 'An unexpected error occurred: ${e.toString()}';
         loading = false;
       });
     }
@@ -85,7 +109,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       appBar: AppBar(title: Text('Register')),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
-        child: SingleChildScrollView( // Added to prevent overflow
+        child: SingleChildScrollView(
           child: Column(
             children: [
               TextField(controller: _emailController, decoration: InputDecoration(labelText: 'Email')),

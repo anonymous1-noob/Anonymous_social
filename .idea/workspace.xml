@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="NONE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="7c050478-cbd0-477b-8e9c-d5b18c365501" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/db/db_schema_v6.sql" beforeDir="false" afterPath="$PROJECT_DIR$/db/db_schema_v6.sql" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/.env.example" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/.gitignore" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/app/build.gradle.kts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/app/src/debug/AndroidManifest.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/app/src/main/AndroidManifest.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/app/src/main/kotlin/com/example/unnamedprojectv1/MainActivity.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/app/src/main/res/drawable-v21/launch_background.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/app/src/main/res/drawable/launch_background.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/app/src/main/res/mipmap-hdpi/ic_launcher.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/app/src/main/res/mipmap-mdpi/ic_launcher.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/app/src/main/res/values-night/styles.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/app/src/main/res/values/styles.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/app/src/profile/AndroidManifest.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/build.gradle.kts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/gradle.properties" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/gradle/wrapper/gradle-wrapper.properties" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/android/settings.gradle.kts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/ios/Runner.xcodeproj/project.pbxproj" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/ios/Runner.xcodeproj/project.pbxproj" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/ios/Runner/Info.plist" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/ios/Runner/Info.plist" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/lib/main.dart" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/lib/main.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/lib/screens/register_screen.dart" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/lib/screens/register_screen.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/linux/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/linux/CMakeLists.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/linux/runner/my_application.cc" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/linux/runner/my_application.cc" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/macos/Runner.xcodeproj/project.pbxproj" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/macos/Runner.xcodeproj/project.pbxproj" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/macos/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/macos/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/macos/Runner/Configs/AppInfo.xcconfig" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/macos/Runner/Configs/AppInfo.xcconfig" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/pubspec.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/pubspec.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/test/widget_test.dart" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/test/widget_test.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/web/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/web/index.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/web/manifest.json" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/web/manifest.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/.gitignore" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/CMakeLists.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/flutter/CMakeLists.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/flutter/generated_plugin_registrant.cc" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/flutter/generated_plugin_registrant.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/flutter/generated_plugins.cmake" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/runner/CMakeLists.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/runner/Runner.rc" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/runner/flutter_window.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/runner/flutter_window.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/runner/main.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/runner/resource.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/runner/resources/app_icon.ico" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/runner/runner.exe.manifest" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/runner/utils.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/runner/utils.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/runner/win32_window.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/windows/runner/win32_window.h" beforeDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="ClangdSettings">
+    <option name="formatViaClangd" value="false" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 0
+}</component>
+  <component name="ProjectId" id="35CDn7aZ4S3ys2GaZGxoepmLr3d" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.cidr.known.project.marker&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.readMode.enableVisualFormatting&quot;: &quot;true&quot;,
+    &quot;cf.first.check.clang-format&quot;: &quot;false&quot;,
+    &quot;cidr.known.project.marker&quot;: &quot;true&quot;,
+    &quot;dart.analysis.tool.window.visible&quot;: &quot;false&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;D:/Downloads/UnnamedProjectV1_minimal&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;
+  }
+}</component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="7c050478-cbd0-477b-8e9c-d5b18c365501" name="Changes" comment="" />
+      <created>1762605324703</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1762605324703</updated>
+    </task>
+    <servers />
+  </component>
+</project>

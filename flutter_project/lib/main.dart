@@ -19,7 +19,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'UnnamedProjectV1',
+      title: 'anonymous_social',
       home: LoginScreen(),
     );
   }
