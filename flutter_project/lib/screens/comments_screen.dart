@@ -16,6 +16,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
   final client = Supabase.instance.client;
   final _commentController = TextEditingController();
   late Future<List<Comment>> _commentsFuture;
+  // The realtime subscription is now a fallback, not the primary method for UI updates.
   late final StreamSubscription<List<Map<String, dynamic>>> _commentsSubscription;
   bool _loading = false;
   Map<String, bool> _likedComments = {};
@@ -25,7 +26,6 @@ class _CommentsScreenState extends State<CommentsScreen> {
     super.initState();
     _commentsFuture = _getComments();
 
-    // Realtime subscription to refresh comments on any change
     _commentsSubscription = client.from('comments').stream(primaryKey: ['id'])
       .listen((_) {
         if (mounted) {
@@ -41,16 +41,17 @@ class _CommentsScreenState extends State<CommentsScreen> {
   }
 
   Future<void> _refresh() async {
-    setState(() {
-      _commentsFuture = _getComments();
-    });
+    if (mounted) {
+      setState(() {
+        _commentsFuture = _getComments();
+      });
+    }
   }
 
   Future<List<Comment>> _getComments() async {
-    // Fetch comments and the liked status for the current user
     final response = await client
         .from('comments')
-        .select('*, users(display_name), comment_likes!inner(user_id)')
+        .select('*, users(display_name), comment_likes(user_id)')
         .eq('post_id', widget.postId)
         .order('created_at', ascending: false);
 
@@ -65,12 +66,13 @@ class _CommentsScreenState extends State<CommentsScreen> {
     final newLikedComments = <String, bool>{};
     for (var item in data) {
       final likes = item['comment_likes'] as List;
-      // Check if the current user's ID is in the list of likes
       newLikedComments[item['id']] = likes.any((like) => like['user_id'] == authId);
     }
-    setState(() {
-      _likedComments = newLikedComments;
-    });
+    if (mounted) {
+        setState(() {
+            _likedComments = newLikedComments;
+        });
+    }
   }
 
   Comment _mapToComment(Map<String, dynamic> item) {
@@ -89,12 +91,12 @@ class _CommentsScreenState extends State<CommentsScreen> {
     setState(() { _loading = true; });
 
     try {
-      // Call the RPC function
       await client.rpc('add_post_comment', params: {
         'post_id_input': widget.postId,
         'content_input': _commentController.text,
       });
       _commentController.clear();
+      _refresh(); // Manually trigger a refresh to update the UI instantly.
     } on PostgrestException catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message), backgroundColor: Colors.red));
     } finally {
@@ -105,9 +107,8 @@ class _CommentsScreenState extends State<CommentsScreen> {
   }
 
   Future<void> _toggleLike(Comment comment) async {
-    // Call the RPC function
     await client.rpc('toggle_comment_like', params: {'comment_id_input': comment.id});
-    // The realtime subscription will handle the refresh
+    _refresh(); // Manually trigger a refresh to update the UI instantly.
   }
 
   @override
@@ -120,7 +121,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
             child: FutureBuilder<List<Comment>>(
               future: _commentsFuture,
               builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
+                if (snapshot.connectionState == ConnectionState.waiting && _likedComments.isEmpty) {
                   return Center(child: CircularProgressIndicator());
                 }
                 if (snapshot.hasError) {

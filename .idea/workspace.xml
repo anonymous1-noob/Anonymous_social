@@ -5,11 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="7c050478-cbd0-477b-8e9c-d5b18c365501" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/flutter_project/lib/screens/edit_profile_screen.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/db/seed_and_triggers.sql" beforeDir="false" afterPath="$PROJECT_DIR$/db/seed_and_triggers.sql" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/flutter_project/lib/screens/comments_screen.dart" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/lib/screens/comments_screen.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/flutter_project/lib/screens/create_post_screen.dart" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/lib/screens/create_post_screen.dart" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/flutter_project/lib/screens/feed_screen.dart" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/lib/screens/feed_screen.dart" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />

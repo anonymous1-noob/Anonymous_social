@@ -14,6 +14,7 @@ class FeedScreen extends StatefulWidget {
 class _FeedScreenState extends State<FeedScreen> {
   final _client = Supabase.instance.client;
   late Future<List<Post>> _postsFuture;
+  // The realtime subscription is now a fallback, not the primary method for UI updates.
   late final StreamSubscription<List<Map<String, dynamic>>> _postsSubscription;
   Map<String, bool> _likedPosts = {};
 
@@ -37,13 +38,14 @@ class _FeedScreenState extends State<FeedScreen> {
   }
 
   Future<void> _refresh() async {
-    setState(() {
-      _postsFuture = _getPosts();
-    });
+    if (mounted) { // Ensure the widget is still in the tree
+      setState(() {
+        _postsFuture = _getPosts();
+      });
+    }
   }
 
   Future<List<Post>> _getPosts() async {
-    // CORRECTED: Use a left join (the default) so posts with 0 likes are not excluded.
     final response = await _client
         .from('posts')
         .select('*, users(display_name), post_likes(user_id)')
@@ -62,9 +64,12 @@ class _FeedScreenState extends State<FeedScreen> {
       final likes = item['post_likes'] as List;
       newLikedPosts[item['id']] = likes.any((like) => like['user_id'] == authId);
     }
-    setState(() {
-      _likedPosts = newLikedPosts;
-    });
+    
+    if (mounted) {
+        setState(() {
+            _likedPosts = newLikedPosts;
+        });
+    }
   }
 
   Post _mapToPost(Map<String, dynamic> item) {
@@ -79,8 +84,10 @@ class _FeedScreenState extends State<FeedScreen> {
   }
 
   Future<void> _toggleLike(Post post) async {
+    // Await the database call
     await _client.rpc('toggle_post_like', params: {'post_id_input': post.id});
-    // The realtime listener will trigger a refresh.
+    // Manually trigger a refresh to update the UI instantly.
+    _refresh();
   }
 
   @override
@@ -91,14 +98,17 @@ class _FeedScreenState extends State<FeedScreen> {
         actions: [
           IconButton(
             icon: Icon(Icons.person),
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => EditProfileScreen())),
+            onPressed: () {
+              Navigator.of(context).push(MaterialPageRoute(builder: (_) => EditProfileScreen()))
+                .then((_) => _refresh()); // Refresh feed when returning from profile
+            },
           ),
         ],
       ),
       body: FutureBuilder<List<Post>>(
         future: _postsFuture,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          if (snapshot.connectionState == ConnectionState.waiting && _likedPosts.isEmpty) {
             return Center(child: CircularProgressIndicator());
           }
           if (snapshot.hasError) {
@@ -138,7 +148,10 @@ class _FeedScreenState extends State<FeedScreen> {
                             TextButton.icon(
                               icon: Icon(Icons.comment), 
                               label: Text(post.commentCount.toString()),
-                              onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CommentsScreen(postId: post.id))),
+                              onPressed: () {
+                                Navigator.of(context).push(MaterialPageRoute(builder: (_) => CommentsScreen(postId: post.id)))
+                                  .then((_) => _refresh()); // Refresh feed when returning from comments
+                              },
                             ),
                           ],
                         ),
@@ -152,7 +165,10 @@ class _FeedScreenState extends State<FeedScreen> {
         },
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CreatePostScreen())),
+        onPressed: () {
+          Navigator.of(context).push(MaterialPageRoute(builder: (_) => CreatePostScreen()))
+            .then((_) => _refresh()); // Refresh feed after creating a post
+        },
         child: Icon(Icons.add),
       ),
     );
