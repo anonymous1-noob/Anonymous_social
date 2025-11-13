@@ -1,4 +1,4 @@
--- UnnamedProjectV1 — Schema v6 (Final)
+-- anonymous_social — Schema v6 (Final)
 -- Nested comments + comment likes, multi-category users, roles/status, category locations, first/last login
 -- Paste this into Supabase SQL Editor and run.
 
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS public.comments (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_comments_post_id ON public.comments(post_id);
+CREATE INDEX IF NOT EXISTS idx_comments__post_id ON public.comments(post_id);
 CREATE INDEX IF NOT EXISTS idx_comments_parent_id ON public.comments(parent_comment_id);
 
 -- 7️⃣ COMMENT LIKES

@@ -16,8 +16,10 @@ class _CommentsScreenState extends State<CommentsScreen> {
   final client = Supabase.instance.client;
   final _commentController = TextEditingController();
   late Future<List<Comment>> _commentsFuture;
+  // The realtime subscription is now a fallback, not the primary method for UI updates.
   late final StreamSubscription<List<Map<String, dynamic>>> _commentsSubscription;
   bool _loading = false;
+  Map<String, bool> _likedComments = {};
 
   @override
   void initState() {
@@ -27,9 +29,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
     _commentsSubscription = client.from('comments').stream(primaryKey: ['id'])
       .listen((_) {
         if (mounted) {
-          setState(() {
-            _commentsFuture = _getComments();
-          });
+          _refresh();
         }
       });
   }
@@ -40,14 +40,39 @@ class _CommentsScreenState extends State<CommentsScreen> {
     super.dispose();
   }
 
+  Future<void> _refresh() async {
+    if (mounted) {
+      setState(() {
+        _commentsFuture = _getComments();
+      });
+    }
+  }
+
   Future<List<Comment>> _getComments() async {
     final response = await client
         .from('comments')
-        .select('*, users(display_name)')
+        .select('*, users(display_name), comment_likes(user_id)')
         .eq('post_id', widget.postId)
         .order('created_at', ascending: false);
 
+    _updateLikedStatus(response);
     return response.map((item) => _mapToComment(item)).toList();
+  }
+  
+  void _updateLikedStatus(List<Map<String, dynamic>> data) {
+    final authId = client.auth.currentUser?.id;
+    if (authId == null) return;
+
+    final newLikedComments = <String, bool>{};
+    for (var item in data) {
+      final likes = item['comment_likes'] as List;
+      newLikedComments[item['id']] = likes.any((like) => like['user_id'] == authId);
+    }
+    if (mounted) {
+        setState(() {
+            _likedComments = newLikedComments;
+        });
+    }
   }
 
   Comment _mapToComment(Map<String, dynamic> item) {
@@ -57,24 +82,21 @@ class _CommentsScreenState extends State<CommentsScreen> {
       author: item['users']?['display_name'] ?? 'Anonymous',
       createdAt: DateTime.parse(item['created_at']),
       likeCount: item['like_count'] ?? 0,
-      isLiked: false, // Live like status is complex and best handled separately
+      isLiked: _likedComments[item['id']] ?? false,
     );
   }
 
   Future<void> _addComment() async {
     if (_commentController.text.isEmpty) return;
-    final userId = client.auth.currentUser?.id;
-    if (userId == null) return;
-
     setState(() { _loading = true; });
 
     try {
-      await client.from('comments').insert({
-        'post_id': widget.postId,
-        'user_id': userId,
-        'content': _commentController.text,
+      await client.rpc('add_post_comment', params: {
+        'post_id_input': widget.postId,
+        'content_input': _commentController.text,
       });
       _commentController.clear();
+      _refresh(); // Manually trigger a refresh to update the UI instantly.
     } on PostgrestException catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message), backgroundColor: Colors.red));
     } finally {
@@ -85,17 +107,8 @@ class _CommentsScreenState extends State<CommentsScreen> {
   }
 
   Future<void> _toggleLike(Comment comment) async {
-    final userId = client.auth.currentUser?.id;
-    if (userId == null) return;
-
-    final currentLikes = await client.from('comment_likes').select().match({'comment_id': comment.id, 'user_id': userId});
-    final isLiked = currentLikes.isNotEmpty;
-
-    if (isLiked) {
-      await client.from('comment_likes').delete().match({'comment_id': comment.id, 'user_id': userId});
-    } else {
-      await client.from('comment_likes').insert({'comment_id': comment.id, 'user_id': userId});
-    }
+    await client.rpc('toggle_comment_like', params: {'comment_id_input': comment.id});
+    _refresh(); // Manually trigger a refresh to update the UI instantly.
   }
 
   @override
@@ -108,15 +121,22 @@ class _CommentsScreenState extends State<CommentsScreen> {
             child: FutureBuilder<List<Comment>>(
               future: _commentsFuture,
               builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) return Center(child: CircularProgressIndicator());
-                if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}'));
-                if (!snapshot.hasData || snapshot.data!.isEmpty) return Center(child: Text('No comments yet.'));
+                if (snapshot.connectionState == ConnectionState.waiting && _likedComments.isEmpty) {
+                  return Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  return Center(child: Text('Error: ${snapshot.error}'));
+                }
+                if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                  return Center(child: Text('No comments yet.'));
+                }
 
                 final comments = snapshot.data!;
                 return ListView.builder(
                   itemCount: comments.length,
                   itemBuilder: (context, index) {
                     final comment = comments[index];
+                    final isLiked = _likedComments[comment.id] ?? false;
                     return ListTile(
                       title: Text(comment.author),
                       subtitle: Text(comment.content),
@@ -125,7 +145,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
                         children: [
                           TextButton.icon(
                             onPressed: () => _toggleLike(comment),
-                            icon: Icon(Icons.favorite_border, color: Colors.grey),
+                            icon: Icon(isLiked ? Icons.favorite : Icons.favorite_border, color: isLiked ? Colors.red : Colors.grey),
                             label: Text(comment.likeCount.toString()),
                           ),
                         ],

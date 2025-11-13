@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models.dart';
 import 'comments_screen.dart';
 import 'create_post_screen.dart';
+import 'edit_profile_screen.dart';
 
 class FeedScreen extends StatefulWidget {
   @override
@@ -11,21 +12,21 @@ class FeedScreen extends StatefulWidget {
 }
 
 class _FeedScreenState extends State<FeedScreen> {
-  final client = Supabase.instance.client;
+  final _client = Supabase.instance.client;
   late Future<List<Post>> _postsFuture;
+  // The realtime subscription is now a fallback, not the primary method for UI updates.
   late final StreamSubscription<List<Map<String, dynamic>>> _postsSubscription;
+  Map<String, bool> _likedPosts = {};
 
   @override
   void initState() {
     super.initState();
     _postsFuture = _getPosts();
 
-    _postsSubscription = client.from('posts').stream(primaryKey: ['id'])
+    _postsSubscription = _client.from('posts').stream(primaryKey: ['id'])
       .listen((_) {
         if (mounted) {
-          setState(() {
-            _postsFuture = _getPosts();
-          });
+          _refresh();
         }
       });
   }
@@ -36,93 +37,138 @@ class _FeedScreenState extends State<FeedScreen> {
     super.dispose();
   }
 
+  Future<void> _refresh() async {
+    if (mounted) { // Ensure the widget is still in the tree
+      setState(() {
+        _postsFuture = _getPosts();
+      });
+    }
+  }
+
   Future<List<Post>> _getPosts() async {
-    // The generic type argument which caused the build error has been removed.
-    final response = await client
+    final response = await _client
         .from('posts')
-        .select('*, users(display_name)')
+        .select('*, users(display_name), post_likes(user_id)')
         .order('created_at', ascending: false);
 
+    _updateLikedStatus(response);
     return response.map((item) => _mapToPost(item)).toList();
+  }
+
+  void _updateLikedStatus(List<Map<String, dynamic>> data) {
+    final authId = _client.auth.currentUser?.id;
+    if (authId == null) return;
+
+    final newLikedPosts = <String, bool>{};
+    for (var item in data) {
+      final likes = item['post_likes'] as List;
+      newLikedPosts[item['id']] = likes.any((like) => like['user_id'] == authId);
+    }
+    
+    if (mounted) {
+        setState(() {
+            _likedPosts = newLikedPosts;
+        });
+    }
   }
 
   Post _mapToPost(Map<String, dynamic> item) {
     return Post(
       id: item['id'],
       content: item['content'],
-      author: item['users']?['display_name'] ?? 'Anonymous',
+      author: item['anonymous'] ? 'Anonymous' : item['users']?['display_name'] ?? 'Anonymous',
       commentCount: item['comment_count'] ?? 0,
       likeCount: item['like_count'] ?? 0,
-      isLiked: false, // Live like status is complex and best handled separately
+      isLiked: _likedPosts[item['id']] ?? false,
     );
   }
 
   Future<void> _toggleLike(Post post) async {
-    final userId = client.auth.currentUser?.id;
-    if (userId == null) return;
-
-    final currentLikes = await client.from('post_likes').select().match({'post_id': post.id, 'user_id': userId});
-    final isLiked = currentLikes.isNotEmpty;
-
-    if (isLiked) {
-      await client.from('post_likes').delete().match({'post_id': post.id, 'user_id': userId});
-    } else {
-      await client.from('post_likes').insert({'post_id': post.id, 'user_id': userId});
-    }
+    // Await the database call
+    await _client.rpc('toggle_post_like', params: {'post_id_input': post.id});
+    // Manually trigger a refresh to update the UI instantly.
+    _refresh();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Feed')),
+      appBar: AppBar(
+        title: Text('Feed'),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.person),
+            onPressed: () {
+              Navigator.of(context).push(MaterialPageRoute(builder: (_) => EditProfileScreen()))
+                .then((_) => _refresh()); // Refresh feed when returning from profile
+            },
+          ),
+        ],
+      ),
       body: FutureBuilder<List<Post>>(
         future: _postsFuture,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) return Center(child: CircularProgressIndicator());
-          if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}'));
-          if (!snapshot.hasData || snapshot.data!.isEmpty) return Center(child: Text('No posts yet.'));
+          if (snapshot.connectionState == ConnectionState.waiting && _likedPosts.isEmpty) {
+            return Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) {
+            return Center(child: Text('Error: ${snapshot.error}'));
+          }
+          if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return Center(child: Text('No posts yet.'));
+          }
 
           final posts = snapshot.data!;
-          return ListView.builder(
-            itemCount: posts.length,
-            itemBuilder: (context, index) {
-              final post = posts[index];
-              return Card(
-                margin: EdgeInsets.all(8.0),
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(post.author, style: TextStyle(fontWeight: FontWeight.bold)),
-                      SizedBox(height: 8),
-                      Text(post.content),
-                      SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          TextButton.icon(
-                            icon: Icon(Icons.favorite_border, color: Colors.grey),
-                            label: Text(post.likeCount.toString()),
-                            onPressed: () => _toggleLike(post),
-                          ),
-                          TextButton.icon(
-                            icon: Icon(Icons.comment), 
-                            label: Text(post.commentCount.toString()),
-                            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CommentsScreen(postId: post.id))),
-                          ),
-                        ],
-                      ),
-                    ],
+          return RefreshIndicator(
+            onRefresh: _refresh,
+            child: ListView.builder(
+              itemCount: posts.length,
+              itemBuilder: (context, index) {
+                final post = posts[index];
+                final isLiked = _likedPosts[post.id] ?? false;
+                return Card(
+                  margin: EdgeInsets.all(8.0),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(post.author, style: TextStyle(fontWeight: FontWeight.bold)),
+                        SizedBox(height: 8),
+                        Text(post.content),
+                        SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            TextButton.icon(
+                              icon: Icon(isLiked ? Icons.favorite : Icons.favorite_border, color: isLiked ? Colors.red : Colors.grey),
+                              label: Text(post.likeCount.toString()),
+                              onPressed: () => _toggleLike(post),
+                            ),
+                            TextButton.icon(
+                              icon: Icon(Icons.comment), 
+                              label: Text(post.commentCount.toString()),
+                              onPressed: () {
+                                Navigator.of(context).push(MaterialPageRoute(builder: (_) => CommentsScreen(postId: post.id)))
+                                  .then((_) => _refresh()); // Refresh feed when returning from comments
+                              },
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           );
         },
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CreatePostScreen())),
+        onPressed: () {
+          Navigator.of(context).push(MaterialPageRoute(builder: (_) => CreatePostScreen()))
+            .then((_) => _refresh()); // Refresh feed after creating a post
+        },
         child: Icon(Icons.add),
       ),
     );
