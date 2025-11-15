@@ -5,7 +5,7 @@ import '../models.dart';
 import 'comments_screen.dart';
 import 'create_post_screen.dart';
 import 'edit_profile_screen.dart';
-import 'login_screen.dart';
+import 'edit_post_screen.dart';
 
 class FeedScreen extends StatefulWidget {
   @override
@@ -14,93 +14,92 @@ class FeedScreen extends StatefulWidget {
 
 class _FeedScreenState extends State<FeedScreen> {
   final _client = Supabase.instance.client;
-  late Future<List<Post>> _postsFuture;
-  late final StreamSubscription<List<Map<String, dynamic>>> _postsSubscription;
-
+  late final Future<void> _initFuture;
+  StreamSubscription<List<Map<String, dynamic>>>? _postsSubscription;
+  
+  List<Map<String, dynamic>> _categories = [];
+  int? _selectedCategoryId;
+  String? _currentUserId;
   Map<String, bool> _likedPosts = {};
-  Map<String, List<Map<String, dynamic>>> _postComments = {};
-  Map<String, dynamic>? _profileData;
 
   @override
   void initState() {
     super.initState();
-    _initFeed();
-    _fetchProfile();
+    _initFuture = _initialize();
+  }
+
+  Future<void> _initialize() async {
+    final authId = _client.auth.currentUser?.id;
+    if (authId != null) {
+      try {
+        final userResponse = await _client.from('users').select('id').eq('auth_id', authId).single();
+        _currentUserId = userResponse['id'];
+      } catch (e) {
+        // Handle error
+      }
+    }
+
+    try {
+      final catResponse = await _client.from('categories').select('id, name');
+      _categories = catResponse;
+    } catch (e) {
+      // Handle error
+    }
+
+    _postsSubscription?.cancel();
     _postsSubscription = _client.from('posts').stream(primaryKey: ['id']).listen((_) {
-      if (mounted) _refresh();
+      if (mounted) {
+        _refresh();
+      }
     });
   }
 
   @override
   void dispose() {
-    _postsSubscription.cancel();
+    _postsSubscription?.cancel();
     super.dispose();
   }
 
-  Future<void> _initFeed() async {
-    final posts = await _getPosts();
+  Future<void> _refresh() async {
     if (mounted) {
-      setState(() {
-        _postsFuture = Future.value(posts);
-      });
+      setState(() {});
     }
   }
 
-  Future<void> _fetchProfile() async {
-    final uid = _client.auth.currentUser?.id;
-    if (uid == null) return;
-    final res = await _client.from('users').select().eq('id', uid).maybeSingle();
-    if (mounted) setState(() => _profileData = res);
-  }
-
-  Future<void> _refresh() async {
-    final posts = await _getPosts();
-    if (mounted) setState(() => _postsFuture = Future.value(posts));
-  }
-
   Future<List<Post>> _getPosts() async {
-    final response = await _client
+    var query = _client
         .from('posts')
-        .select('*, users(display_name), post_likes(user_id)')
-        .order('created_at', ascending: false);
+        .select('*, user_id, users(display_name), post_likes(user_id)');
+
+    if (_selectedCategoryId != null) {
+      query = query.eq('category_id', _selectedCategoryId!);
+    }
+
+    final response = await query.order('created_at', ascending: false);
 
     _updateLikedStatus(response);
-    await Future.wait(response.map((item) async {
-      final postId = item['id'];
-      final comments = await _client
-          .from('comments')
-          .select('content, users(display_name)')
-          .eq('post_id', postId)
-          .order('created_at', ascending: false)
-          .limit(3);
-      _postComments[postId] = comments;
-    }));
-
     return response.map((item) => _mapToPost(item)).toList();
   }
 
   void _updateLikedStatus(List<Map<String, dynamic>> data) {
-    final authId = _client.auth.currentUser?.id;
-    if (authId == null) return;
-
+    if (_currentUserId == null) return;
     final newLikedPosts = <String, bool>{};
     for (var item in data) {
       final likes = item['post_likes'] as List;
-      newLikedPosts[item['id']] = likes.any((like) => like['user_id'] == authId);
+      newLikedPosts[item['id']] = likes.any((like) => like['user_id'] == _currentUserId);
     }
-
-    if (mounted) setState(() => _likedPosts = newLikedPosts);
+    _likedPosts = newLikedPosts;
   }
 
   Post _mapToPost(Map<String, dynamic> item) {
     return Post(
       id: item['id'],
+      userId: item['user_id'],
       content: item['content'],
-      author: item['anonymous']
-          ? 'Anonymous'
-          : item['users']?['display_name'] ?? 'Anonymous',
+      author: item['anonymous'] ?? false ? 'Anonymous' : item['users']?['display_name'] ?? 'Anonymous',
       commentCount: item['comment_count'] ?? 0,
       likeCount: item['like_count'] ?? 0,
+      impressionCount: item['impression_count'] ?? 0,
       isLiked: _likedPosts[item['id']] ?? false,
     );
   }
@@ -110,242 +109,157 @@ class _FeedScreenState extends State<FeedScreen> {
     _refresh();
   }
 
-  Future<void> _logout() async {
-    await _client.auth.signOut();
-    if (mounted) {
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => LoginScreen()),
-        (route) => false,
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-
     return Scaffold(
-      backgroundColor: Colors.grey[100],
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        title: Row(
-          children: [
-            Expanded(
-              child: TextField(
-                decoration: InputDecoration(
-                  hintText: 'Search...',
-                  prefixIcon: const Icon(Icons.search),
-                  contentPadding: const EdgeInsets.all(0),
-                  filled: true,
-                  fillColor: Colors.grey[200],
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(25),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 16),
-            IconButton(
-              icon: const Icon(Icons.person_outline),
-              onPressed: () {
-                Navigator.of(context)
-                    .push(MaterialPageRoute(builder: (_) => EditProfileScreen()))
-                    .then((_) => _fetchProfile());
-              },
-            ),
-            IconButton(
-              icon: const Icon(Icons.logout),
-              onPressed: _logout,
-            ),
-          ],
-        ),
+        title: Text('Feed'),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.person),
+            onPressed: () {
+              Navigator.of(context).push(MaterialPageRoute(builder: (_) => EditProfileScreen()))
+                .then((_) => _refresh());
+            },
+          ),
+        ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // LEFT SECTION (20%)
-            Expanded(
-              flex: 2,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade200,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: _buildLeftSection(),
-              ),
-            ),
-            const SizedBox(width: 12),
+      body: FutureBuilder<void>(
+        future: _initFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) {
+            return Center(child: Text('Error initializing feed: ${snapshot.error}'));
+          }
 
-            // MIDDLE SECTION (60%)
-            Expanded(
-              flex: 6,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: _buildMiddleFeed(),
-              ),
-            ),
-            const SizedBox(width: 12),
-
-            // RIGHT SECTION (20%)
-            Expanded(
-              flex: 2,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.blueGrey.shade50,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: _buildRightSection(),
-              ),
-            ),
-          ],
-        ),
+          return _buildFeed();
+        },
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () {
-          Navigator.of(context)
-              .push(MaterialPageRoute(builder: (_) => CreatePostScreen()))
-              .then((_) => _refresh());
+          Navigator.of(context).push(MaterialPageRoute(builder: (_) => CreatePostScreen()))
+            .then((_) => _refresh());
         },
-        backgroundColor: Colors.blue,
-        child: const Icon(Icons.add, size: 28),
+        child: Icon(Icons.add),
       ),
     );
   }
 
-  Widget _buildLeftSection() {
+  Widget _buildFeed() {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: const [
-        Text("Categories",
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-        SizedBox(height: 12),
-        ListTile(
-          leading: Icon(Icons.trending_up),
-          title: Text("Trending"),
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: DropdownButtonFormField<int?>(
+            value: _selectedCategoryId,
+            decoration: InputDecoration(labelText: 'Filter by Category'),
+            items: [
+              DropdownMenuItem<int?>(value: null, child: Text('All Categories')),
+              ..._categories.map((category) {
+                return DropdownMenuItem<int?>(
+                  value: category['id'] as int,
+                  child: Text(category['name'] as String),
+                );
+              }),
+            ],
+            onChanged: (value) {
+              setState(() {
+                _selectedCategoryId = value;
+                _refresh();
+              });
+            },
+          ),
         ),
-        ListTile(
-          leading: Icon(Icons.group),
-          title: Text("Community"),
-        ),
-        ListTile(
-          leading: Icon(Icons.person),
-          title: Text("My Posts"),
-        ),
-        ListTile(
-          leading: Icon(Icons.bookmark),
-          title: Text("Saved"),
-        ),
-      ],
-    );
-  }
+        Expanded(
+          child: FutureBuilder<List<Post>>(
+            future: _getPosts(),
+            builder: (context, postSnapshot) {
+              if (postSnapshot.connectionState == ConnectionState.waiting) {
+                return Center(child: CircularProgressIndicator());
+              }
+              if (postSnapshot.hasError) {
+                return Center(child: Text('Error loading posts: ${postSnapshot.error}'));
+              }
+              if (!postSnapshot.hasData || postSnapshot.data!.isEmpty) {
+                return RefreshIndicator(
+                  onRefresh: _refresh,
+                  child: Center(child: Text('No posts in this category yet.')),
+                );
+              }
 
-  Widget _buildMiddleFeed() {
-    return FutureBuilder<List<Post>>(
-      future: _postsFuture,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting &&
-            _likedPosts.isEmpty) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          return Center(child: Text('Error: ${snapshot.error}'));
-        }
-        if (!snapshot.hasData || snapshot.data!.isEmpty) {
-          return const Center(child: Text('No posts yet.'));
-        }
-
-        final posts = snapshot.data!;
-        return RefreshIndicator(
-          onRefresh: _refresh,
-          child: ListView.builder(
-            itemCount: posts.length,
-            itemBuilder: (context, index) {
-              final post = posts[index];
-              final isLiked = _likedPosts[post.id] ?? false;
-              final comments = _postComments[post.id] ?? [];
-
-              return Card(
-                margin: const EdgeInsets.only(bottom: 16),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16)),
-                elevation: 3,
-                child: Padding(
-                  padding: const EdgeInsets.all(14.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const CircleAvatar(
-                              radius: 20, backgroundColor: Colors.blueGrey),
-                          const SizedBox(width: 10),
-                          Text(post.author,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold, fontSize: 16)),
-                        ],
+              final posts = postSnapshot.data!;
+              return RefreshIndicator(
+                onRefresh: _refresh,
+                child: ListView.builder(
+                  itemCount: posts.length,
+                  itemBuilder: (context, index) {
+                    final post = posts[index];
+                    final isLiked = _likedPosts[post.id] ?? false;
+                    return Card(
+                      margin: EdgeInsets.all(8.0),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(post.author, style: TextStyle(fontWeight: FontWeight.bold)),
+                                if (post.userId == _currentUserId)
+                                  PopupMenuButton<String>(
+                                    onSelected: (value) {
+                                      if (value == 'edit') {
+                                        Navigator.of(context).push(MaterialPageRoute(builder: (_) => EditPostScreen(post: post)))
+                                          .then((_) => _refresh());
+                                      }
+                                    },
+                                    itemBuilder: (context) => [
+                                      PopupMenuItem(value: 'edit', child: Text('Edit')),
+                                    ],
+                                  ),
+                              ],
+                            ),
+                            SizedBox(height: 8),
+                            Text(post.content),
+                            SizedBox(height: 8),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                TextButton.icon(
+                                  icon: Icon(isLiked ? Icons.favorite : Icons.favorite_border, color: isLiked ? Colors.red : Colors.grey),
+                                  label: Text(post.likeCount.toString()),
+                                  onPressed: () => _toggleLike(post),
+                                ),
+                                TextButton.icon(
+                                  icon: Icon(Icons.comment), 
+                                  label: Text(post.commentCount.toString()),
+                                  onPressed: () {
+                                    Navigator.of(context).push(MaterialPageRoute(builder: (_) => CommentsScreen(postId: post.id)))
+                                      .then((_) => _refresh());
+                                  },
+                                ),
+                                Row(
+                                  children: [
+                                    Icon(Icons.remove_red_eye_outlined, color: Colors.grey),
+                                    SizedBox(width: 4),
+                                    Text(post.impressionCount.toString(), style: TextStyle(color: Colors.grey)),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
-                      const SizedBox(height: 10),
-                      Text(post.content,
-                          style: const TextStyle(fontSize: 15)),
-                      const SizedBox(height: 12),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          TextButton.icon(
-                            icon: Icon(
-                                isLiked
-                                    ? Icons.favorite
-                                    : Icons.favorite_border,
-                                color:
-                                    isLiked ? Colors.red : Colors.grey[700]),
-                            label: Text('${post.likeCount}'),
-                            onPressed: () => _toggleLike(post),
-                          ),
-                          TextButton.icon(
-                            icon: const Icon(Icons.comment_outlined),
-                            label: Text('${post.commentCount}'),
-                            onPressed: () {
-                              Navigator.of(context)
-                                  .push(MaterialPageRoute(
-                                      builder: (_) =>
-                                          CommentsScreen(postId: post.id)))
-                                  .then((_) => _refresh());
-                            },
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
+                    );
+                  },
                 ),
               );
             },
           ),
-        );
-      },
-    );
-  }
-
-  Widget _buildRightSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: const [
-        Text("Suggestions",
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-        SizedBox(height: 12),
-        Text("• Follow topics you love"),
-        SizedBox(height: 8),
-        Text("• Connect with others"),
-        SizedBox(height: 8),
-        Text("• Customize your feed"),
+        ),
       ],
     );
   }

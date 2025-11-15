@@ -1,6 +1,6 @@
 -- anonymous_social — Schema v6 (Final)
--- Nested comments + comment likes, multi-category users, roles/status, category locations, first/last login
--- Paste this into Supabase SQL Editor and run.
+-- This file contains the final, clean schema for the database.
+-- Paste this into Supabase SQL Editor and run if you need to recreate the tables.
 
 -- 1️⃣ USERS
 CREATE TABLE IF NOT EXISTS public.users (
@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS public.users (
   email TEXT UNIQUE,
   display_name TEXT,
   avatar_url TEXT,
-  role TEXT DEFAULT 'user' CHECK (role IN ('user', 'moderator', 'admin')),
+  role TEXT DEFAULT 'user' CHECK (role IN ('user', 'moderator', 'admin')), 
   status TEXT DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'deactivated')),
   first_login TIMESTAMP,
   last_login TIMESTAMP,
@@ -19,10 +19,8 @@ CREATE TABLE IF NOT EXISTS public.users (
 
 CREATE INDEX IF NOT EXISTS idx_users_auth_id ON public.users(auth_id);
 CREATE INDEX IF NOT EXISTS idx_users_username ON public.users(username);
-CREATE INDEX IF NOT EXISTS idx_users_role ON public.users(role);
-CREATE INDEX IF NOT EXISTS idx_users_status ON public.users(status);
 
--- 2️⃣ CATEGORIES (with location)
+-- 2️⃣ CATEGORIES
 CREATE TABLE IF NOT EXISTS public.categories (
   id SERIAL PRIMARY KEY,
   type TEXT NOT NULL CHECK (type IN ('company', 'college', 'region')),
@@ -37,9 +35,6 @@ CREATE TABLE IF NOT EXISTS public.categories (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_categories_type ON public.categories(type);
-CREATE INDEX IF NOT EXISTS idx_categories_location ON public.categories(city, state, country);
-
 -- 3️⃣ USER_CATEGORY (many-to-many)
 CREATE TABLE IF NOT EXISTS public.user_category (
   id SERIAL PRIMARY KEY,
@@ -49,9 +44,6 @@ CREATE TABLE IF NOT EXISTS public.user_category (
   joined_at TIMESTAMP DEFAULT NOW(),
   UNIQUE (user_id, category_id)
 );
-
-CREATE INDEX IF NOT EXISTS idx_user_category_user_id ON public.user_category(user_id);
-CREATE INDEX IF NOT EXISTS idx_user_category_category_id ON public.user_category(category_id);
 
 -- 4️⃣ POSTS
 CREATE TABLE IF NOT EXISTS public.posts (
@@ -91,7 +83,7 @@ CREATE TABLE IF NOT EXISTS public.comments (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_comments__post_id ON public.comments(post_id);
+CREATE INDEX IF NOT EXISTS idx_comments_post_id ON public.comments(post_id);
 CREATE INDEX IF NOT EXISTS idx_comments_parent_id ON public.comments(parent_comment_id);
 
 -- 7️⃣ COMMENT LIKES
@@ -103,64 +95,11 @@ CREATE TABLE IF NOT EXISTS public.comment_likes (
   UNIQUE (comment_id, user_id)
 );
 
--- 🔒 RLS (Row Level Security) recommendations
--- Enable RLS in Supabase dashboard for desired tables and create policies similar to below:
+-- 🔒 RLS Policies should be defined in the Supabase Dashboard or a separate policy file.
+-- It is recommended to enable RLS for all tables and define specific policies.
 
--- Example RLS policies (customize per your app rules):
+-- Example of a correct RLS policy for posts:
 -- ALTER TABLE public.posts ENABLE ROW LEVEL SECURITY;
--- CREATE POLICY "Public can view all posts" ON public.posts FOR SELECT USING (true);
--- CREATE POLICY "Authenticated users can insert posts" ON public.posts FOR INSERT WITH CHECK (auth.uid() = user_id);
-
--- ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
--- CREATE POLICY "Users can update own profile" ON public.users FOR UPDATE USING (auth.uid() = auth_id);
-
--- 🔔 Realtime (optional)
--- To enable realtime on these tables, add them to the supabase_realtime publication (via SQL Editor or Supabase UI).
--- Example:
--- ALTER PUBLICATION supabase_realtime ADD TABLE public.posts;
--- ALTER PUBLICATION supabase_realtime ADD TABLE public.comments;
--- ALTER PUBLICATION supabase_realtime ADD TABLE public.messages; -- (if you later add messages)
-
-
-CREATE OR REPLACE FUNCTION public.update_post_like_count(postid UUID)
-RETURNS VOID AS $$
-BEGIN
-  UPDATE public.posts
-  SET like_count = (SELECT COUNT(*) FROM public.post_likes WHERE post_id = postid)
-  WHERE id = postid;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION public.update_post_comment_count(postid UUID)
-RETURNS VOID AS $$
-BEGIN
-  UPDATE public.posts
-  SET comment_count = (SELECT COUNT(*) FROM public.comments WHERE post_id = postid)
-  WHERE id = postid;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TABLE IF NOT EXISTS public.posts (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES public.users(id) ON DELETE SET NULL,
-  content TEXT NOT NULL,
-  anonymous BOOLEAN DEFAULT TRUE,
-  like_count INT DEFAULT 0,
-  comment_count INT DEFAULT 0,
-  created_at TIMESTAMP DEFAULT NOW()
-);
-
-ALTER TABLE public.posts ENABLE ROW LEVEL SECURITY;
-
--- Everyone can read posts
-CREATE POLICY "Anyone can read posts"
-ON public.posts
-FOR SELECT
-USING (true);
-
--- Authenticated users can insert
-CREATE POLICY "Users can insert posts"
-ON public.posts
-FOR INSERT
-WITH CHECK (auth.role() = 'authenticated' OR true);
-
+-- CREATE POLICY "Public can view all posts." ON public.posts FOR SELECT USING (true);
+-- CREATE POLICY "Users can insert their own posts." ON public.posts FOR INSERT WITH CHECK (auth.uid() IN (SELECT auth_id FROM public.users WHERE id = user_id));
+-- CREATE POLICY "Users can update their own posts." ON public.posts FOR UPDATE USING (auth.uid() IN (SELECT auth_id FROM public.users WHERE id = user_id));
