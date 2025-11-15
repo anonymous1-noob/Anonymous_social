@@ -5,12 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="7c050478-cbd0-477b-8e9c-d5b18c365501" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/flutter_project/lib/screens/edit_post_screen.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/caches/deviceStreaming.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/caches/deviceStreaming.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/db/db_schema_v6.sql" beforeDir="false" afterPath="$PROJECT_DIR$/db/db_schema_v6.sql" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/flutter_project/lib/models.dart" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/lib/models.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/flutter_project/lib/screens/feed_screen.dart" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/lib/screens/feed_screen.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/.env" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/.env" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -42,7 +38,7 @@
     "cf.first.check.clang-format": "false",
     "cidr.known.project.marker": "true",
     "dart.analysis.tool.window.visible": "false",
-    "git-widget-placeholder": "main",
+    "git-widget-placeholder": "fix__red__screen__error",
     "ignore.virus.scanning.warn.message": "true",
     "kotlin-language-version-configured": "true",
     "last_opened_file_path": "D:/Downloads/UnnamedProjectV1_minimal",
