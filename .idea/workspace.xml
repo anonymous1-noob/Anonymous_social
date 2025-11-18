@@ -4,7 +4,11 @@
     <option name="autoReloadType" value="NONE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="7c050478-cbd0-477b-8e9c-d5b18c365501" name="Changes" comment="" />
+    <list default="true" id="7c050478-cbd0-477b-8e9c-d5b18c365501" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/lib/screens/comments_screen.dart" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/lib/screens/comments_screen.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/lib/screens/feed_screen.dart" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/lib/screens/feed_screen.dart" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -35,7 +39,7 @@
     "cf.first.check.clang-format": "false",
     "cidr.known.project.marker": "true",
     "dart.analysis.tool.window.visible": "false",
-    "git-widget-placeholder": "change__db__creds",
+    "git-widget-placeholder": "like__dislike__feature",
     "ignore.virus.scanning.warn.message": "true",
     "kotlin-language-version-configured": "true",
     "last_opened_file_path": "D:/Downloads/UnnamedProjectV1_minimal",

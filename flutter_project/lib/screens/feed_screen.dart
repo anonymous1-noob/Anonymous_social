@@ -229,7 +229,7 @@ class _FeedScreenState extends State<FeedScreen> {
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 TextButton.icon(
-                                  icon: Icon(isLiked ? Icons.favorite : Icons.favorite_border, color: isLiked ? Colors.red : Colors.grey),
+                                  icon: Icon(isLiked ? Icons.thumb_up : Icons.thumb_up_outlined, color: isLiked ? Theme.of(context).primaryColor : Colors.grey),
                                   label: Text(post.likeCount.toString()),
                                   onPressed: () => _toggleLike(post),
                                 ),
