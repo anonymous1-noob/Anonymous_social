@@ -21,6 +21,7 @@ class _FeedScreenState extends State<FeedScreen> {
   int? _selectedCategoryId;
   String? _currentUserId;
   Map<String, bool> _likedPosts = {};
+  Map<String, bool> _dislikedPosts = {};
 
   @override
   void initState() {
@@ -34,17 +35,13 @@ class _FeedScreenState extends State<FeedScreen> {
       try {
         final userResponse = await _client.from('users').select('id').eq('auth_id', authId).single();
         _currentUserId = userResponse['id'];
-      } catch (e) {
-        // Handle error
-      }
+      } catch (e) {}
     }
 
     try {
       final catResponse = await _client.from('categories').select('id, name');
       _categories = catResponse;
-    } catch (e) {
-      // Handle error
-    }
+    } catch (e) {}
 
     _postsSubscription?.cancel();
     _postsSubscription = _client.from('posts').stream(primaryKey: ['id']).listen((_) {
@@ -69,7 +66,7 @@ class _FeedScreenState extends State<FeedScreen> {
   Future<List<Post>> _getPosts() async {
     var query = _client
         .from('posts')
-        .select('*, user_id, users(display_name), post_likes(user_id)');
+        .select('*, user_id, users(display_name), post_likes(user_id), post_dislikes(user_id)');
 
     if (_selectedCategoryId != null) {
       query = query.eq('category_id', _selectedCategoryId!);
@@ -77,18 +74,24 @@ class _FeedScreenState extends State<FeedScreen> {
 
     final response = await query.order('created_at', ascending: false);
 
-    _updateLikedStatus(response);
+    _updateReactionStatus(response);
     return response.map((item) => _mapToPost(item)).toList();
   }
 
-  void _updateLikedStatus(List<Map<String, dynamic>> data) {
+  void _updateReactionStatus(List<Map<String, dynamic>> data) {
     if (_currentUserId == null) return;
     final newLikedPosts = <String, bool>{};
+    final newDislikedPosts = <String, bool>{};
     for (var item in data) {
-      final likes = item['post_likes'] as List;
+      final likes = (item['post_likes'] as List?) ?? [];
+      final dislikes = (item['post_dislikes'] as List?) ?? [];
+      
       newLikedPosts[item['id']] = likes.any((like) => like['user_id'] == _currentUserId);
+      newDislikedPosts[item['id']] = dislikes.any((dislike) => dislike['user_id'] == _currentUserId);
     }
+    
     _likedPosts = newLikedPosts;
+    _dislikedPosts = newDislikedPosts;
   }
 
   Post _mapToPost(Map<String, dynamic> item) {
@@ -99,14 +102,21 @@ class _FeedScreenState extends State<FeedScreen> {
       author: item['anonymous'] ?? false ? 'Anonymous' : item['users']?['display_name'] ?? 'Anonymous',
       commentCount: item['comment_count'] ?? 0,
       likeCount: item['like_count'] ?? 0,
+      dislikeCount: item['dislike_count'] ?? 0,
       impressionCount: item['impression_count'] ?? 0,
       isLiked: _likedPosts[item['id']] ?? false,
+      isDisliked: _dislikedPosts[item['id']] ?? false,
     );
   }
 
   Future<void> _toggleLike(Post post) async {
     await _client.rpc('toggle_post_like', params: {'post_id_input': post.id});
-    _refresh();
+    _refresh(); // RESTORED: This is required for instant UI updates.
+  }
+
+  Future<void> _toggleDislike(Post post) async {
+    await _client.rpc('toggle_post_dislike', params: {'post_id_input': post.id});
+    _refresh(); // RESTORED: This is required for instant UI updates.
   }
 
   @override
@@ -185,7 +195,7 @@ class _FeedScreenState extends State<FeedScreen> {
               if (!postSnapshot.hasData || postSnapshot.data!.isEmpty) {
                 return RefreshIndicator(
                   onRefresh: _refresh,
-                  child: Center(child: Text('No posts in this category yet.')),
+                  child: Center(child: ListView(children: [Text('No posts in this category yet.')]))
                 );
               }
 
@@ -197,6 +207,7 @@ class _FeedScreenState extends State<FeedScreen> {
                   itemBuilder: (context, index) {
                     final post = posts[index];
                     final isLiked = _likedPosts[post.id] ?? false;
+                    final isDisliked = _dislikedPosts[post.id] ?? false;
                     return Card(
                       margin: EdgeInsets.all(8.0),
                       child: Padding(
@@ -228,10 +239,19 @@ class _FeedScreenState extends State<FeedScreen> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                TextButton.icon(
-                                  icon: Icon(isLiked ? Icons.thumb_up : Icons.thumb_up_outlined, color: isLiked ? Theme.of(context).primaryColor : Colors.grey),
-                                  label: Text(post.likeCount.toString()),
-                                  onPressed: () => _toggleLike(post),
+                                Row(
+                                  children: [
+                                    TextButton.icon(
+                                      icon: Icon(isLiked ? Icons.thumb_up : Icons.thumb_up_outlined, color: isLiked ? Theme.of(context).primaryColor : Colors.grey),
+                                      label: Text(post.likeCount.toString()),
+                                      onPressed: () => _toggleLike(post),
+                                    ),
+                                    TextButton.icon(
+                                      icon: Icon(isDisliked ? Icons.thumb_down : Icons.thumb_down_outlined, color: isDisliked ? Theme.of(context).colorScheme.error : Colors.grey),
+                                      label: Text(post.dislikeCount.toString()),
+                                      onPressed: () => _toggleDislike(post),
+                                    ),
+                                  ],
                                 ),
                                 TextButton.icon(
                                   icon: Icon(Icons.comment), 

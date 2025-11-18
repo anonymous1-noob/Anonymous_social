@@ -5,8 +5,10 @@ class Post {
   final String author;
   final int commentCount;
   final int likeCount;
+  final int dislikeCount; // Added
   final int impressionCount;
   final bool isLiked;
+  final bool isDisliked; // Added
 
   Post({
     required this.id,
@@ -15,8 +17,10 @@ class Post {
     required this.author,
     required this.commentCount,
     required this.likeCount,
+    required this.dislikeCount,
     required this.impressionCount,
     this.isLiked = false,
+    this.isDisliked = false,
   });
 }
 

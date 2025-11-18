@@ -1,109 +1,110 @@
--- seed_and_triggers.sql -- FINAL (v4)
--- This version completely REMOVES the old trigger system and replaces it with reliable RPC functions.
-
--- ===================================
--- SEED DATA (for reference, can be commented out if already run)
--- ===================================
-
--- INSERT INTO public.users ... (rest of seed data is unchanged)
+-- seed_and_triggers.sql -- FINAL (v5)
+-- Adds dislike functionality and ensures like/dislike are mutually exclusive.
 
 -- =================================================================
--- FINAL, RELIABLE RPC FUNCTIONS (v4)
--- This replaces the old trigger system entirely.
+-- RPC FUNCTIONS (v5)
 -- =================================================================
 
--- 1. Function to toggle a like on a POST and update the count
+-- 1. Function to toggle a LIKE on a post.
+-- If the user has an existing dislike, it will be removed.
 CREATE OR REPLACE FUNCTION public.toggle_post_like(post_id_input UUID)
 RETURNS void AS $$
 DECLARE
   user_profile_id UUID;
-  existing_like_id INT;
 BEGIN
-  -- Find the public.users.id from the currently authenticated user
   SELECT id INTO user_profile_id FROM public.users WHERE auth_id = auth.uid();
+  IF user_profile_id IS NULL THEN RAISE EXCEPTION 'User profile not found.'; END IF;
 
-  IF user_profile_id IS NULL THEN
-    RAISE EXCEPTION 'User profile not found.';
-  END IF;
+  -- Remove any existing dislike from this user for this post.
+  DELETE FROM public.post_dislikes WHERE post_id = post_id_input AND user_id = user_profile_id;
 
-  -- Check if the user has already liked this post
-  SELECT id INTO existing_like_id FROM public.post_likes
-  WHERE post_id = post_id_input AND user_id = user_profile_id;
-
-  -- Toggle the like
-  IF existing_like_id IS NOT NULL THEN
-    -- User has liked it, so delete the like
-    DELETE FROM public.post_likes WHERE id = existing_like_id;
+  -- Toggle the like.
+  IF EXISTS (SELECT 1 FROM public.post_likes WHERE post_id = post_id_input AND user_id = user_profile_id) THEN
+    DELETE FROM public.post_likes WHERE post_id = post_id_input AND user_id = user_profile_id;
   ELSE
-    -- User has not liked it, so insert the like
-    INSERT INTO public.post_likes (post_id, user_id)
-    VALUES (post_id_input, user_profile_id);
+    INSERT INTO public.post_likes (post_id, user_id) VALUES (post_id_input, user_profile_id);
   END IF;
 
-  -- Recalculate and update the like_count on the posts table
+  -- Recalculate counts.
   UPDATE public.posts
-  SET like_count = (SELECT COUNT(*) FROM public.post_likes WHERE post_id = post_id_input)
+  SET 
+    like_count = (SELECT COUNT(*) FROM public.post_likes WHERE post_id = post_id_input),
+    dislike_count = (SELECT COUNT(*) FROM public.post_dislikes WHERE post_id = post_id_input)
   WHERE id = post_id_input;
-
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 
--- 2. Function to add a COMMENT to a post and update the count
+-- 2. Function to toggle a DISLIKE on a post.
+-- If the user has an existing like, it will be removed.
+CREATE OR REPLACE FUNCTION public.toggle_post_dislike(post_id_input UUID)
+RETURNS void AS $$
+DECLARE
+  user_profile_id UUID;
+BEGIN
+  SELECT id INTO user_profile_id FROM public.users WHERE auth_id = auth.uid();
+  IF user_profile_id IS NULL THEN RAISE EXCEPTION 'User profile not found.'; END IF;
+
+  -- Remove any existing like from this user for this post.
+  DELETE FROM public.post_likes WHERE post_id = post_id_input AND user_id = user_profile_id;
+
+  -- Toggle the dislike.
+  IF EXISTS (SELECT 1 FROM public.post_dislikes WHERE post_id = post_id_input AND user_id = user_profile_id) THEN
+    DELETE FROM public.post_dislikes WHERE post_id = post_id_input AND user_id = user_profile_id;
+  ELSE
+    INSERT INTO public.post_dislikes (post_id, user_id) VALUES (post_id_input, user_profile_id);
+  END IF;
+
+  -- Recalculate counts.
+  UPDATE public.posts
+  SET 
+    like_count = (SELECT COUNT(*) FROM public.post_likes WHERE post_id = post_id_input),
+    dislike_count = (SELECT COUNT(*) FROM public.post_dislikes WHERE post_id = post_id_input)
+  WHERE id = post_id_input;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- 3. Function to add a COMMENT to a post.
 CREATE OR REPLACE FUNCTION public.add_post_comment(post_id_input UUID, content_input TEXT)
 RETURNS void AS $$
 DECLARE
   user_profile_id UUID;
 BEGIN
   SELECT id INTO user_profile_id FROM public.users WHERE auth_id = auth.uid();
+  IF user_profile_id IS NULL THEN RAISE EXCEPTION 'User profile not found.'; END IF;
 
-  IF user_profile_id IS NULL THEN
-    RAISE EXCEPTION 'User profile not found.';
-  END IF;
+  INSERT INTO public.comments (post_id, user_id, content) VALUES (post_id_input, user_profile_id, content_input);
 
-  -- Insert the new comment
-  INSERT INTO public.comments (post_id, user_id, content)
-  VALUES (post_id_input, user_profile_id, content_input);
-
-  -- Recalculate and update the comment_count on the posts table
   UPDATE public.posts
   SET comment_count = (SELECT COUNT(*) FROM public.comments WHERE post_id = post_id_input)
   WHERE id = post_id_input;
-
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 3. Function to toggle a like on a COMMENT and update the count
+
+-- 4. Function to toggle a LIKE on a COMMENT.
 CREATE OR REPLACE FUNCTION public.toggle_comment_like(comment_id_input UUID)
 RETURNS void AS $$
 DECLARE
   user_profile_id UUID;
-  existing_like_id INT;
 BEGIN
   SELECT id INTO user_profile_id FROM public.users WHERE auth_id = auth.uid();
+  IF user_profile_id IS NULL THEN RAISE EXCEPTION 'User profile not found.'; END IF;
 
-  IF user_profile_id IS NULL THEN
-    RAISE EXCEPTION 'User profile not found.';
-  END IF;
-
-  SELECT id INTO existing_like_id FROM public.comment_likes
-  WHERE comment_id = comment_id_input AND user_id = user_profile_id;
-
-  IF existing_like_id IS NOT NULL THEN
-    DELETE FROM public.comment_likes WHERE id = existing_like_id;
+  IF EXISTS (SELECT 1 FROM public.comment_likes WHERE comment_id = comment_id_input AND user_id = user_profile_id) THEN
+    DELETE FROM public.comment_likes WHERE comment_id = comment_id_input AND user_id = user_profile_id;
   ELSE
-    INSERT INTO public.comment_likes (comment_id, user_id)
-    VALUES (comment_id_input, user_profile_id);
+    INSERT INTO public.comment_likes (comment_id, user_id) VALUES (comment_id_input, user_profile_id);
   END IF;
 
   UPDATE public.comments
   SET like_count = (SELECT COUNT(*) FROM public.comment_likes WHERE comment_id = comment_id_input)
   WHERE id = comment_id_input;
-
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Drop the old, non-functional triggers if they exist
+-- Drop old, unused triggers
 DROP TRIGGER IF EXISTS post_like_count_update_trigger ON public.post_likes;
 DROP TRIGGER IF EXISTS post_comment_count_update_trigger ON public.comments;
 DROP TRIGGER IF EXISTS comment_like_count_update_trigger ON public.comment_likes;
