@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS public.posts (
   content TEXT NOT NULL,
   anonymous BOOLEAN DEFAULT TRUE,
   like_count INT DEFAULT 0,
-  dislike_count INT DEFAULT 0, -- Added dislike_count
+  dislike_count INT DEFAULT 0,
   comment_count INT DEFAULT 0,
   impression_count INT DEFAULT 0,
   created_at TIMESTAMP DEFAULT NOW()
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS public.post_likes (
   UNIQUE (post_id, user_id)
 );
 
--- 6️⃣ POST DISLIKES (New Table)
+-- 6️⃣ POST DISLIKES
 CREATE TABLE IF NOT EXISTS public.post_dislikes (
   id SERIAL PRIMARY KEY,
   post_id UUID REFERENCES public.posts(id) ON DELETE CASCADE,
@@ -75,12 +75,21 @@ CREATE TABLE IF NOT EXISTS public.comments (
   parent_comment_id UUID REFERENCES public.comments(id) ON DELETE CASCADE,
   content TEXT NOT NULL,
   like_count INT DEFAULT 0,
+  dislike_count INT DEFAULT 0, -- Added dislike_count
   reply_count INT DEFAULT 0,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
 -- 8️⃣ COMMENT LIKES
 CREATE TABLE IF NOT EXISTS public.comment_likes (
+  id SERIAL PRIMARY KEY,
+  comment_id UUID REFERENCES public.comments(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+  UNIQUE (comment_id, user_id)
+);
+
+-- 9️⃣ COMMENT DISLIKES (New Table)
+CREATE TABLE IF NOT EXISTS public.comment_dislikes (
   id SERIAL PRIMARY KEY,
   comment_id UUID REFERENCES public.comments(id) ON DELETE CASCADE,
   user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
