@@ -28,10 +28,14 @@ class _LoginScreenState extends State<LoginScreen> {
         password: _passwordController.text,
       );
       final user = res.user;
-      if (user != null && mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => FeedScreen()),
-        );
+      if (user != null) {
+        // Call the RPC function to update timestamps
+        await client.rpc('update_user_login_timestamps');
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => FeedScreen()),
+          );
+        }
       } else {
         setState(() {
           error = 'Invalid credentials. Please try again.';
