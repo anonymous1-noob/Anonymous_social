@@ -2,8 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'comments_screen.dart';
 import 'notifications_screen.dart';
+import '../widgets/comments_sheet.dart';
 import '../widgets/report_dialog.dart';
 
 class FeedScreen extends StatefulWidget {
@@ -30,7 +30,7 @@ class _FeedScreenState extends State<FeedScreen> {
   bool _ensuredMyIdentity = false;
   bool _loadingIdentities = false;
 
-  // ---------- Realtime likes state ----------
+  // ---------- Realtime likes state (posts) ----------
   RealtimeChannel? _likesChannel;
   final Map<String, int> _likeCountByPost = {};
   final Set<String> _likedByMe = {};
@@ -38,8 +38,18 @@ class _FeedScreenState extends State<FeedScreen> {
 
   // ---------- Feed inline comment expansion ----------
   final Map<String, int> _visibleCommentsCountByPost = {}; // postId -> visible count
+
+  // ---------- Instagram-like per-post UI state ----------
+  final Set<String> _expandedCaptions = {};
+  final Set<String> _savedPosts = {};
+  final Map<String, bool> _heartBurst = {};
+  final Map<String, Timer> _heartTimers = {};
   final Map<String, TextEditingController> _commentCtrlByPost = {};
   final Map<String, bool> _sendingCommentByPost = {};
+
+  // ---------- Nested replies preview inside feed ----------
+  final Set<String> _expandedRepliesForParent = {}; // parentCommentId
+  final Map<String, int> _visibleRepliesCountByParent = {}; // parentCommentId -> visible replies
 
   bool _refreshing = false;
 
@@ -63,6 +73,9 @@ class _FeedScreenState extends State<FeedScreen> {
         _commentCtrlByPost.values.forEach((c) => c.dispose());
         _commentCtrlByPost.clear();
         _sendingCommentByPost.clear();
+
+        _expandedRepliesForParent.clear();
+        _visibleRepliesCountByParent.clear();
       });
 
       _setupLikesRealtime();
@@ -76,6 +89,11 @@ class _FeedScreenState extends State<FeedScreen> {
     _authSub?.cancel();
     _likesChannel?.unsubscribe();
     _createPostController.dispose();
+
+    for (final t in _heartTimers.values) {
+      t.cancel();
+    }
+    _heartTimers.clear();
     _commentCtrlByPost.values.forEach((c) => c.dispose());
     super.dispose();
   }
@@ -211,7 +229,7 @@ class _FeedScreenState extends State<FeedScreen> {
     }
   }
 
-  // ===================== Likes: fetch + realtime =====================
+  // ===================== Likes: fetch + realtime (posts) =====================
   Future<void> _fetchInitialLikes() async {
     try {
       final rows = await supabase.from('post_likes').select('id, post_id, user_id');
@@ -346,6 +364,25 @@ class _FeedScreenState extends State<FeedScreen> {
     }
   }
 
+  // ===================== Likes: inline (comments) =====================
+  Future<void> _toggleCommentLike(String commentId) async {
+    final me = _currentUserId;
+    if (me == null) {
+      _needLoginSnack();
+      return;
+    }
+
+    try {
+      await supabase.rpc('toggle_comment_like', params: {
+        'comment_id_input': commentId,
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Comment like failed: $e')),
+      );
+    }
+  }
+
   // ===================== Inline Create Post =====================
   Future<void> _createPost() async {
     final me = _currentUserId;
@@ -413,7 +450,6 @@ class _FeedScreenState extends State<FeedScreen> {
 
       ctrl.clear();
 
-      // Ensure comments section is open and show at least 5
       setState(() {
         final current = _visibleCommentsCountByPost[postId] ?? 0;
         _visibleCommentsCountByPost[postId] = current == 0 ? 5 : current;
@@ -442,6 +478,26 @@ class _FeedScreenState extends State<FeedScreen> {
     setState(() {
       final current = _visibleCommentsCountByPost[postId] ?? 0;
       _visibleCommentsCountByPost[postId] = current + 5;
+    });
+  }
+
+  // ---------- replies preview toggles ----------
+  void _toggleRepliesForParent(String parentCommentId) {
+    setState(() {
+      final expanded = _expandedRepliesForParent.contains(parentCommentId);
+      if (expanded) {
+        _expandedRepliesForParent.remove(parentCommentId);
+      } else {
+        _expandedRepliesForParent.add(parentCommentId);
+        _visibleRepliesCountByParent[parentCommentId] ??= 3;
+      }
+    });
+  }
+
+  void _loadMoreReplies(String parentCommentId) {
+    setState(() {
+      final current = _visibleRepliesCountByParent[parentCommentId] ?? 3;
+      _visibleRepliesCountByParent[parentCommentId] = current + 3;
     });
   }
 
@@ -603,7 +659,7 @@ class _FeedScreenState extends State<FeedScreen> {
             ),
           const Spacer(),
           const Text(
-            "Tip: This panel will later hold pages, groups, filters, etc.",
+            "Next: categories will filter feed here.",
             style: TextStyle(fontSize: 12, color: Colors.grey),
           ),
         ],
@@ -618,6 +674,7 @@ class _FeedScreenState extends State<FeedScreen> {
 
     final postsStream = supabase.from('posts').stream(primaryKey: ['id']);
     final commentsStream = supabase.from('comments').stream(primaryKey: ['id']);
+    final commentLikesStream = supabase.from('comment_likes').stream(primaryKey: ['id']);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -640,11 +697,11 @@ class _FeedScreenState extends State<FeedScreen> {
               ),
             ],
           ),
+          drawer: isWide ? null : Drawer(child: _leftSidebar(context, isWide: false)),
           body: Row(
             children: [
-              if (isWide) _leftSidebar(context, isWide: isWide),
+              if (isWide) _leftSidebar(context, isWide: true),
 
-              // Right feed area
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () async {
@@ -654,114 +711,149 @@ class _FeedScreenState extends State<FeedScreen> {
                     if (mounted) setState(() => _refreshing = false);
                   },
                   child: StreamBuilder<List<Map<String, dynamic>>>(
-                    stream: commentsStream,
-                    builder: (context, commentsSnap) {
-                      final allCommentsRaw = commentsSnap.data ?? [];
+                    stream: commentLikesStream,
+                    builder: (context, likesSnap) {
+                      final likes = likesSnap.data ?? [];
+                      final me = _currentUserId;
 
-                      // build comments per post (only top-level, not deleted)
-                      final Map<String, List<Map<String, dynamic>>> commentsByPost = {};
-                      final Set<String> commentUserIds = {};
+                      final Map<String, int> likeCountByComment = {};
+                      final Set<String> likedByMeComment = {};
 
-                      for (final c in allCommentsRaw) {
-                        if (c['is_deleted'] == true) continue;
-                        final postId = (c['post_id'] ?? '').toString();
-                        if (postId.isEmpty) continue;
+                      for (final l in likes) {
+                        final cid = (l['comment_id'] ?? '').toString();
+                        if (cid.isEmpty) continue;
+                        likeCountByComment[cid] = (likeCountByComment[cid] ?? 0) + 1;
 
-                        final parentId = (c['parent_comment_id'] ?? '').toString();
-                        final isTopLevel = parentId.isEmpty || parentId == 'null';
-                        if (!isTopLevel) continue;
-
-                        commentsByPost.putIfAbsent(postId, () => []).add(c);
-
-                        final uid = (c['user_id'] ?? '').toString();
-                        if (uid.isNotEmpty) commentUserIds.add(uid);
-                      }
-
-                      // sort each list newest first (latest comments)
-                      for (final k in commentsByPost.keys) {
-                        commentsByPost[k]!.sort((a, b) {
-                          final aT = (a['created_at'] ?? '').toString();
-                          final bT = (b['created_at'] ?? '').toString();
-                          return bT.compareTo(aT);
-                        });
+                        final uid = (l['user_id'] ?? '').toString();
+                        if (me != null && uid == me) likedByMeComment.add(cid);
                       }
 
                       return StreamBuilder<List<Map<String, dynamic>>>(
-                        stream: postsStream,
-                        builder: (context, postsSnap) {
-                          if (postsSnap.connectionState == ConnectionState.waiting && !postsSnap.hasData) {
-                            return const Center(child: CircularProgressIndicator());
-                          }
-                          if (postsSnap.hasError) {
-                            return Center(child: Text('Error loading posts:\n${postsSnap.error}'));
+                        stream: commentsStream,
+                        builder: (context, commentsSnap) {
+                          final allCommentsRaw = commentsSnap.data ?? [];
+
+                          // For inline preview:
+                          // - top-level comments per post (newest first)
+                          // - replies per parent comment (newest first)
+                          final Map<String, List<Map<String, dynamic>>> topLevelByPost = {};
+                          final Map<String, List<Map<String, dynamic>>> repliesByParent = {};
+                          final Set<String> commentUserIds = {};
+
+                          for (final c in allCommentsRaw) {
+                            if (c['is_deleted'] == true) continue;
+
+                            final postId = (c['post_id'] ?? '').toString();
+                            if (postId.isEmpty) continue;
+
+                            final uid = (c['user_id'] ?? '').toString();
+                            if (uid.isNotEmpty) commentUserIds.add(uid);
+
+                            final parentId = (c['parent_comment_id'] ?? '').toString();
+                            final isTopLevel = parentId.isEmpty || parentId == 'null';
+
+                            if (isTopLevel) {
+                              topLevelByPost.putIfAbsent(postId, () => []).add(c);
+                            } else {
+                              repliesByParent.putIfAbsent(parentId, () => []).add(c);
+                            }
                           }
 
-                          final allPosts = postsSnap.data ?? [];
-                          final posts = allPosts
-                              .where((p) =>
-                                  p['category_id'] == widget.categoryId &&
-                                  (p['is_deleted'] == false || p['is_deleted'] == null))
-                              .toList()
-                            ..sort((a, b) {
+                          for (final k in topLevelByPost.keys) {
+                            topLevelByPost[k]!.sort((a, b) {
                               final aT = (a['created_at'] ?? '').toString();
                               final bT = (b['created_at'] ?? '').toString();
                               return bT.compareTo(aT);
                             });
-
-                          final authorIds = <String>{};
-                          for (final p in posts) {
-                            final uid = (p['user_id'] ?? '').toString();
-                            if (uid.isNotEmpty) authorIds.add(uid);
                           }
 
-                          _loadIdentitiesForUsers({...authorIds, ...commentUserIds});
-
-                          if (!_likesLoaded) {
-                            return const Center(child: CircularProgressIndicator());
+                          for (final k in repliesByParent.keys) {
+                            repliesByParent[k]!.sort((a, b) {
+                              final aT = (a['created_at'] ?? '').toString();
+                              final bT = (b['created_at'] ?? '').toString();
+                              return bT.compareTo(aT);
+                            });
                           }
 
-                          final maxWidth = isWide ? 900.0 : double.infinity;
+                          return StreamBuilder<List<Map<String, dynamic>>>(
+                            stream: postsStream,
+                            builder: (context, postsSnap) {
+                              if (postsSnap.connectionState == ConnectionState.waiting && !postsSnap.hasData) {
+                                return const Center(child: CircularProgressIndicator());
+                              }
+                              if (postsSnap.hasError) {
+                                return Center(child: Text('Error loading posts:\n${postsSnap.error}'));
+                              }
 
-                          return ListView(
-                            padding: EdgeInsets.symmetric(
-                              vertical: 12,
-                              horizontal: isWide ? 18 : 12,
-                            ),
-                            children: [
-                              Center(
-                                child: ConstrainedBox(
-                                  constraints: BoxConstraints(maxWidth: maxWidth),
-                                  child: _createPostBox(),
+                              final allPosts = postsSnap.data ?? [];
+                              final posts = allPosts
+                                  .where((p) =>
+                                      p['category_id'] == widget.categoryId &&
+                                      (p['is_deleted'] == false || p['is_deleted'] == null))
+                                  .toList()
+                                ..sort((a, b) {
+                                  final aT = (a['created_at'] ?? '').toString();
+                                  final bT = (b['created_at'] ?? '').toString();
+                                  return bT.compareTo(aT);
+                                });
+
+                              final authorIds = <String>{};
+                              for (final p in posts) {
+                                final uid = (p['user_id'] ?? '').toString();
+                                if (uid.isNotEmpty) authorIds.add(uid);
+                              }
+
+                              _loadIdentitiesForUsers({...authorIds, ...commentUserIds});
+
+                              if (!_likesLoaded) return const Center(child: CircularProgressIndicator());
+
+                              final maxWidth = isWide ? 900.0 : double.infinity;
+
+                              return ListView(
+                                padding: EdgeInsets.symmetric(
+                                  vertical: 12,
+                                  horizontal: isWide ? 18 : 12,
                                 ),
-                              ),
-                              const SizedBox(height: 12),
+                                children: [
+                                  Center(
+                                    child: ConstrainedBox(
+                                      constraints: BoxConstraints(maxWidth: maxWidth),
+                                      child: _createPostBox(),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
 
-                              if (posts.isEmpty)
-                                Center(
-                                  child: ConstrainedBox(
-                                    constraints: BoxConstraints(maxWidth: maxWidth),
-                                    child: const Card(
-                                      child: Padding(
-                                        padding: EdgeInsets.all(18),
-                                        child: Center(child: Text("No posts yet")),
+                                  if (posts.isEmpty)
+                                    Center(
+                                      child: ConstrainedBox(
+                                        constraints: BoxConstraints(maxWidth: maxWidth),
+                                        child: const Card(
+                                          child: Padding(
+                                            padding: EdgeInsets.all(18),
+                                            child: Center(child: Text("No posts yet")),
+                                          ),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ),
 
-                              for (final post in posts)
-                                Center(
-                                  child: ConstrainedBox(
-                                    constraints: BoxConstraints(maxWidth: maxWidth),
-                                    child: _postCard(
-                                      post,
-                                      commentsByPost[(post['id'] ?? '').toString()] ?? const [],
+                                  for (final post in posts)
+                                    Center(
+                                      child: ConstrainedBox(
+                                        constraints: BoxConstraints(maxWidth: maxWidth),
+                                        child: _postCard(
+                                          post,
+                                          topLevelByPost[(post['id'] ?? '').toString()] ?? const [],
+                                          repliesByParent,
+                                          likeCountByComment,
+                                          likedByMeComment,
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                                ),
 
-                              const SizedBox(height: 18),
-                            ],
+                                  const SizedBox(height: 18),
+                                ],
+                              );
+                            },
                           );
                         },
                       );
@@ -771,11 +863,6 @@ class _FeedScreenState extends State<FeedScreen> {
               ),
             ],
           ),
-          drawer: isWide
-              ? null
-              : Drawer(
-                  child: _leftSidebar(context, isWide: false),
-                ),
         );
       },
     );
@@ -826,7 +913,14 @@ class _FeedScreenState extends State<FeedScreen> {
   }
 
   // ===================== Post card UI =====================
-  Widget _postCard(Map<String, dynamic> post, List<Map<String, dynamic>> topLevelCommentsNewestFirst) {
+  
+Widget _postCard(
+    Map<String, dynamic> post,
+    List<Map<String, dynamic>> topLevelCommentsNewestFirst,
+    Map<String, List<Map<String, dynamic>>> repliesByParent,
+    Map<String, int> likeCountByComment,
+    Set<String> likedByMeComment,
+  ) {
     final postId = (post['id'] ?? '').toString();
     final content = (post['content'] ?? '').toString();
     final authorId = (post['user_id'] ?? '').toString();
@@ -841,26 +935,44 @@ class _FeedScreenState extends State<FeedScreen> {
     final likesCount = _likeCountByPost[postId] ?? 0;
     final isLiked = _likedByMe.contains(postId);
 
-    final totalComments = topLevelCommentsNewestFirst.length;
-    final visible = _visibleCommentsCountByPost[postId] ?? 0;
-    final isOpen = visible > 0;
+    // Total comments (top-level + replies)
+    int totalComments = topLevelCommentsNewestFirst.length;
+    for (final parent in topLevelCommentsNewestFirst) {
+      final pid = (parent['id'] ?? '').toString();
+      totalComments += (repliesByParent[pid]?.length ?? 0);
+    }
 
-    // show latest comments (newest first) but only up to visible count
-    final visibleComments = isOpen
-        ? topLevelCommentsNewestFirst.take(visible).toList()
-        : <Map<String, dynamic>>[];
+    final isCaptionExpanded = _expandedCaptions.contains(postId);
+    final isSaved = _savedPosts.contains(postId);
+    final showHeart = _heartBurst[postId] == true;
+
+    void triggerHeartBurst() {
+      _heartTimers[postId]?.cancel();
+      setState(() {
+        _heartBurst[postId] = true;
+      });
+      _heartTimers[postId] = Timer(const Duration(milliseconds: 650), () {
+        if (!mounted) return;
+        setState(() {
+          _heartBurst[postId] = false;
+        });
+      });
+    }
+
+    final bool needsMore = content.trim().length > 140;
 
     return Card(
       elevation: 0,
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header row
-            Row(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 8, 10),
+            child: Row(
               children: [
                 CircleAvatar(
                   radius: 18,
@@ -877,171 +989,433 @@ class _FeedScreenState extends State<FeedScreen> {
                     children: [
                       Row(
                         children: [
-                          Expanded(child: Text(name, style: const TextStyle(fontWeight: FontWeight.w800))),
+                          Expanded(
+                            child: Text(
+                              name,
+                              style: const TextStyle(fontWeight: FontWeight.w800),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
                           if (edited)
                             const Padding(
                               padding: EdgeInsets.only(left: 6),
-                              child: Text("Edited", style: TextStyle(fontSize: 11, color: Colors.grey)),
+                              child: Text("• Edited", style: TextStyle(fontSize: 12, color: Colors.black45)),
                             ),
                         ],
                       ),
-                      if (time.isNotEmpty) Text(time, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                      if (time.isNotEmpty)
+                        Text(time, style: const TextStyle(fontSize: 12, color: Colors.black45)),
                     ],
                   ),
                 ),
                 IconButton(
                   icon: const Icon(Icons.more_horiz),
+                  splashRadius: 18,
                   onPressed: () => _showPostMenu(post),
                 ),
               ],
             ),
+          ),
 
-            const SizedBox(height: 10),
-
-            // Content
-            Text(content, style: const TextStyle(fontSize: 15, height: 1.35)),
-
-            const SizedBox(height: 10),
-
-            // Actions
-            Row(
+          // Media area (Instagram-like, 1:1)
+          // If you add a `media_url` column to `posts`, this will render the image.
+          // Otherwise it falls back to a placeholder.
+          GestureDetector(
+            onDoubleTap: () {
+              if (!isLiked) {
+                _togglePostLike(postId);
+              }
+              triggerHeartBurst();
+            },
+            child: Stack(
+              alignment: Alignment.center,
               children: [
-                TextButton.icon(
-                  onPressed: () => _togglePostLike(postId),
-                  icon: Icon(isLiked ? Icons.favorite : Icons.favorite_border,
-                      color: isLiked ? Colors.redAccent : Colors.black87),
-                  label: Text(isLiked ? "Liked" : "Like"),
+                AspectRatio(
+                  aspectRatio: 1,
+                  child: Builder(
+                    builder: (_) {
+                      final mediaUrl = (post['media_url'] ?? '').toString().trim();
+
+                      if (mediaUrl.isEmpty) {
+                        return Container(
+                          color: const Color(0xFFF3F4F6),
+                          child: Center(
+                            child: Icon(
+                              Icons.image_outlined,
+                              size: 64,
+                              color: Colors.black.withOpacity(0.18),
+                            ),
+                          ),
+                        );
+                      }
+
+                      return ClipRRect(
+                        child: Image.network(
+                          mediaUrl,
+                          fit: BoxFit.cover,
+                          width: double.infinity,
+                          height: double.infinity,
+                          loadingBuilder: (context, child, progress) {
+                            if (progress == null) return child;
+                            return Container(
+                              color: const Color(0xFFF3F4F6),
+                              alignment: Alignment.center,
+                              child: const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            );
+                          },
+                          errorBuilder: (context, error, stack) {
+                            return Container(
+                              color: const Color(0xFFF3F4F6),
+                              alignment: Alignment.center,
+                              child: Icon(
+                                Icons.broken_image_outlined,
+                                size: 56,
+                                color: Colors.black.withOpacity(0.18),
+                              ),
+                            );
+                          },
+                        ),
+                      );
+                    },
+                  ),
                 ),
-                const SizedBox(width: 8),
-                TextButton.icon(
-                  onPressed: () => _toggleCommentsOpen(postId),
+                AnimatedOpacity(
+                  opacity: showHeart ? 1 : 0,
+                  duration: const Duration(milliseconds: 120),
+                  child: AnimatedScale(
+                    scale: showHeart ? 1.0 : 0.85,
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOutBack,
+                    child: const Icon(
+                      Icons.favorite,
+                      color: Colors.white,
+                      size: 96,
+                      shadows: [
+                        Shadow(color: Colors.black54, blurRadius: 14),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Actions row
+          Padding(
+            padding: const EdgeInsets.fromLTRB(6, 8, 6, 0),
+            child: Row(
+              children: [
+                IconButton(
+                  splashRadius: 20,
+                  onPressed: () {
+                    _togglePostLike(postId);
+                  },
+                  icon: Icon(
+                    isLiked ? Icons.favorite : Icons.favorite_border,
+                    color: isLiked ? Colors.redAccent : Colors.black87,
+                  ),
+                ),
+                IconButton(
+                  splashRadius: 20,
+                  onPressed: () {
+                    showCommentsSheet(
+                      context: context,
+                      postId: postId,
+                      categoryId: widget.categoryId,
+                    );
+                  },
                   icon: const Icon(Icons.chat_bubble_outline),
-                  label: Text(isOpen ? "Hide comments" : "Comments"),
+                ),
+                IconButton(
+                  splashRadius: 20,
+                  onPressed: () {
+                    // Share stub (future)
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Share coming soon')),
+                    );
+                  },
+                  icon: const Icon(Icons.send_outlined),
                 ),
                 const Spacer(),
                 IconButton(
-                  tooltip: "Open full thread",
-                  icon: const Icon(Icons.open_in_new),
+                  splashRadius: 20,
                   onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => CommentsScreen(
-                          postId: postId,
-                          categoryId: widget.categoryId,
-                        ),
-                      ),
-                    );
+                    setState(() {
+                      if (isSaved) {
+                        _savedPosts.remove(postId);
+                      } else {
+                        _savedPosts.add(postId);
+                      }
+                    });
                   },
+                  icon: Icon(isSaved ? Icons.bookmark : Icons.bookmark_border),
                 ),
               ],
             ),
+          ),
 
-            // Counts
-            Row(
+          // Meta: likes + caption + comments entry
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (likesCount > 0)
-                  Text("$likesCount like${likesCount == 1 ? '' : 's'}",
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
-                const SizedBox(width: 10),
-                if (totalComments > 0)
-                  Text("$totalComments comment${totalComments == 1 ? '' : 's'}",
-                      style: const TextStyle(color: Colors.grey)),
-              ],
-            ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2, bottom: 6),
+                    child: Text(
+                      "$likesCount like${likesCount == 1 ? '' : 's'}",
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
 
-            // Inline comments section
-            if (isOpen) ...[
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF7F7FA),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: const Color(0xFFE7E7EF)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // comments list
-                    if (visibleComments.isEmpty)
-                      const Text("No comments yet", style: TextStyle(color: Colors.grey))
-                    else
-                      Column(
-                        children: [
-                          for (final c in visibleComments) _miniCommentRow(c),
-                        ],
+                // Caption (username + text)
+                if (content.trim().isNotEmpty)
+                  Wrap(
+                    children: [
+                      Text(
+                        "$name ",
+                        style: const TextStyle(fontWeight: FontWeight.w800),
                       ),
-
-                    const SizedBox(height: 10),
-
-                    // load more button
-                    if (visible < totalComments)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton(
-                          onPressed: () => _loadMoreComments(postId),
-                          child: const Text("Load more (+5)"),
-                        ),
+                      Text(
+                        isCaptionExpanded || !needsMore ? content : content.trim().substring(0, 140) + "… ",
+                        style: const TextStyle(fontSize: 14, height: 1.25),
                       ),
-
-                    const SizedBox(height: 6),
-
-                    // inline add comment composer
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _commentControllerForPost(postId),
-                            decoration: const InputDecoration(
-                              hintText: "Write a comment…",
-                              border: OutlineInputBorder(),
-                              isDense: true,
-                            ),
+                      if (needsMore)
+                        InkWell(
+                          onTap: () {
+                            setState(() {
+                              if (isCaptionExpanded) {
+                                _expandedCaptions.remove(postId);
+                              } else {
+                                _expandedCaptions.add(postId);
+                              }
+                            });
+                          },
+                          child: Text(
+                            isCaptionExpanded ? "less" : "more",
+                            style: const TextStyle(color: Colors.black54, fontWeight: FontWeight.w700),
                           ),
                         ),
-                        const SizedBox(width: 10),
-                        (_sendingCommentByPost[postId] == true)
-                            ? const SizedBox(
-                                height: 18,
-                                width: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : IconButton(
-                                icon: const Icon(Icons.send),
-                                onPressed: () => _addInlineComment(postId),
-                              ),
-                      ],
+                    ],
+                  ),
+
+                if (totalComments > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: InkWell(
+                      onTap: () {
+                        showCommentsSheet(
+                          context: context,
+                          postId: postId,
+                          categoryId: widget.categoryId,
+                        );
+                      },
+                      child: Text(
+                        "View all $totalComments comment${totalComments == 1 ? '' : 's'}",
+                        style: const TextStyle(color: Colors.black54, fontWeight: FontWeight.w600),
+                      ),
                     ),
-                  ],
-                ),
-              ),
-            ],
-          ],
-        ),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _miniCommentRow(Map<String, dynamic> c) {
+  Widget _miniCommentRowWithReplies(
+    Map<String, dynamic> c,
+    List<Map<String, dynamic>> repliesNewestFirst,
+    Map<String, int> likeCountByComment,
+    Set<String> likedByMeComment,
+  ) {
+    final commentId = (c['id'] ?? '').toString();
     final userId = (c['user_id'] ?? '').toString();
+
     final name = userId.isNotEmpty ? _displayNameForUser(userId) : 'Anon';
     final color = userId.isNotEmpty ? _displayColorForUser(userId) : Colors.grey;
     final initials = _initialsFromLabel(name);
+
     final content = (c['content'] ?? '').toString();
     final time = _timeAgo(c['created_at']);
+    final edited = _isEdited(c);
+
+    final liked = likedByMeComment.contains(commentId);
+    final likeCount = likeCountByComment[commentId] ?? 0;
+
+    final replyCount = repliesNewestFirst.length;
+    final isRepliesOpen = _expandedRepliesForParent.contains(commentId);
+    final visibleReplies = _visibleRepliesCountByParent[commentId] ?? 3;
+
+    // Replies are already newest-first; show latest N, but in UI we show oldest->newest inside that slice
+    final shownReplies = isRepliesOpen
+        ? repliesNewestFirst.take(visibleReplies).toList().reversed.toList()
+        : <Map<String, dynamic>>[];
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        children: [
+          // comment row
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CircleAvatar(
+                radius: 14,
+                backgroundColor: color,
+                child: Text(
+                  initials,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 11),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFE9E9EF)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Row(
+                              children: [
+                                Text(name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+                                if (edited)
+                                  const Padding(
+                                    padding: EdgeInsets.only(left: 6),
+                                    child: Text("Edited", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          if (time.isNotEmpty) Text(time, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(content),
+
+                      const SizedBox(height: 8),
+
+                      Row(
+                        children: [
+                          InkWell(
+                            onTap: () => _toggleCommentLike(commentId),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  liked ? Icons.favorite : Icons.favorite_border,
+                                  size: 16,
+                                  color: liked ? Colors.redAccent : Colors.grey,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  likeCount == 0 ? "Like" : "$likeCount",
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: liked ? Colors.redAccent : Colors.grey.shade700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          InkWell(
+                            onTap: () {
+                              // Keep feed simple: Reply goes to full thread
+                              showCommentsSheet(
+                                context: context,
+                                postId: (c['post_id'] ?? '').toString(),
+                                categoryId: widget.categoryId,
+                              );
+                            },
+                            child: const Text(
+                              "Reply",
+                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.grey),
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          if (replyCount > 0)
+                            InkWell(
+                              onTap: () => _toggleRepliesForParent(commentId),
+                              child: Text(
+                                isRepliesOpen ? "Hide replies" : "View replies ($replyCount)",
+                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.grey),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          // Replies preview
+          if (isRepliesOpen && replyCount > 0)
+            Padding(
+              padding: const EdgeInsets.only(left: 34, top: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final r in shownReplies) _miniReplyRow(r, likeCountByComment, likedByMeComment),
+
+                  if (visibleReplies < replyCount)
+                    TextButton(
+                      onPressed: () => _loadMoreReplies(commentId),
+                      child: const Text("Load more replies (+3)"),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _miniReplyRow(
+    Map<String, dynamic> r,
+    Map<String, int> likeCountByComment,
+    Set<String> likedByMeComment,
+  ) {
+    final commentId = (r['id'] ?? '').toString();
+    final userId = (r['user_id'] ?? '').toString();
+
+    final name = userId.isNotEmpty ? _displayNameForUser(userId) : 'Anon';
+    final color = userId.isNotEmpty ? _displayColorForUser(userId) : Colors.grey;
+    final initials = _initialsFromLabel(name);
+
+    final content = (r['content'] ?? '').toString();
+    final time = _timeAgo(r['created_at']);
+
+    final liked = likedByMeComment.contains(commentId);
+    final likeCount = likeCountByComment[commentId] ?? 0;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           CircleAvatar(
-            radius: 14,
+            radius: 12,
             backgroundColor: color,
             child: Text(
               initials,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 11),
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 10),
             ),
           ),
           const SizedBox(width: 10),
@@ -1061,12 +1435,34 @@ class _FeedScreenState extends State<FeedScreen> {
                       Expanded(
                         child: Text(name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
                       ),
-                      if (time.isNotEmpty)
-                        Text(time, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                      if (time.isNotEmpty) Text(time, style: const TextStyle(fontSize: 11, color: Colors.grey)),
                     ],
                   ),
                   const SizedBox(height: 2),
                   Text(content),
+                  const SizedBox(height: 8),
+                  InkWell(
+                    onTap: () => _toggleCommentLike(commentId),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          liked ? Icons.favorite : Icons.favorite_border,
+                          size: 15,
+                          color: liked ? Colors.redAccent : Colors.grey,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          likeCount == 0 ? "Like" : "$likeCount",
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: liked ? Colors.redAccent : Colors.grey.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
