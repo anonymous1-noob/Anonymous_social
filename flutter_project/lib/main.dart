@@ -1,26 +1,24 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'screens/login_screen.dart';
+import 'auth/auth_gate.dart';
 
-Future<void> main() async {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(fileName: '.env');
+
   await Supabase.initialize(
-    url: dotenv.env['SUPABASE_URL'] ?? '',
-    anonKey: dotenv.env['SUPABASE_ANON_KEY'] ?? '',
+    url: 'https://gvfpktjreztuwoxqiydk.supabase.co',
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd2ZnBrdGpyZXp0dXdveHFpeWRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMxNzAzOTgsImV4cCI6MjA3ODc0NjM5OH0.HUHoLTCzOJTa7YOgQnTHaMsm1XM_qUAE-oyvHqViIqk',
   );
-  runApp(const MyApp());
+
+  runApp(MyApp());
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'anonymous_social',
-      home: LoginScreen(),
+      debugShowCheckedModeBanner: false,
+      home: AuthGate(),
     );
   }
 }
