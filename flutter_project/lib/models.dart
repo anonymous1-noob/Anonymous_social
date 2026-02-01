@@ -1,47 +1,71 @@
 class Post {
-  final String id;
-  final String? userId;
+  final int id;
   final String content;
-  final String author;
-  final int commentCount;
-  final int likeCount;
-  final int dislikeCount;
-  final int impressionCount;
-  final bool isLiked;
-  final bool isDisliked;
+  final String anonymousName;
+  final int impressions;
+  final int likes;
+  final DateTime createdAt;
 
   Post({
     required this.id,
-    this.userId,
     required this.content,
-    required this.author,
-    required this.commentCount,
-    required this.likeCount,
-    required this.dislikeCount,
-    required this.impressionCount,
-    this.isLiked = false,
-    this.isDisliked = false,
+    required this.anonymousName,
+    required this.impressions,
+    required this.likes,
+    required this.createdAt,
   });
+
+  factory Post.fromJson(Map<String, dynamic> json) {
+    return Post(
+      id: json['id'],
+      content: json['content'],
+      anonymousName: json['anonymous_name'] ?? 'Anonymous',
+      impressions: json['impressions'] ?? 0,
+      likes: json['likes'] ?? 0,
+      createdAt: DateTime.parse(json['created_at']),
+    );
+  }
+
+  Post copyWith({
+    int? impressions,
+    int? likes,
+  }) {
+    return Post(
+      id: id,
+      content: content,
+      anonymousName: anonymousName,
+      impressions: impressions ?? this.impressions,
+      likes: likes ?? this.likes,
+      createdAt: createdAt,
+    );
+  }
 }
 
+/// ----------------------------
+/// COMMENT MODEL
+/// ----------------------------
 class Comment {
-  final String id;
-  final String content;
-  final String author;
+  final int id;
+  final int postId;
+  final String text;
+  final String anonymousName;
   final DateTime createdAt;
-  final int likeCount;
-  final int dislikeCount; // Added
-  final bool isLiked;
-  final bool isDisliked; // Added
 
   Comment({
     required this.id,
-    required this.content,
-    required this.author,
+    required this.postId,
+    required this.text,
+    required this.anonymousName,
     required this.createdAt,
-    required this.likeCount,
-    required this.dislikeCount,
-    this.isLiked = false,
-    this.isDisliked = false,
   });
+
+  factory Comment.fromJson(Map<String, dynamic> json) {
+    return Comment(
+      id: json['id'],
+      postId: json['post_id'],
+      text: json['text'],
+      anonymousName: json['anonymous_name'] ?? 'Anonymous',
+      createdAt: DateTime.parse(json['created_at']),
+    );
+  }
 }

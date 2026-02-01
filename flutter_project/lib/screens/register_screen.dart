@@ -3,124 +3,138 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 class RegisterScreen extends StatefulWidget {
   @override
-  _RegisterScreenState createState() => _RegisterScreenState();
+  State<RegisterScreen> createState() => _RegisterScreenState();
 }
 
 class _RegisterScreenState extends State<RegisterScreen> {
-  final client = Supabase.instance.client;
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-  final _usernameController = TextEditingController();
-  final _displayNameController = TextEditingController();
+  final supabase = Supabase.instance.client;
+
+  final email = TextEditingController();
+  final pass = TextEditingController();
+
   bool loading = false;
   String? error;
 
-  Future<void> signUpWithEmail() async {
+  Future<void> signup() async {
     setState(() {
       loading = true;
       error = null;
     });
 
     try {
-      final res = await client.auth.signUp(
-          email: _emailController.text.trim(),
-          password: _passwordController.text);
-      final user = res.user;
+      final res = await supabase.auth.signUp(
+        email: email.text.trim(),
+        password: pass.text,
+      );
 
-      if (user != null) {
-        // Insert profile into public.users table
-        await client.from('users').insert({
-          'auth_id': user.id, // Corrected: was 'id'
-          'username': _usernameController.text.trim(),
-          'email': _emailController.text.trim(),
-          'display_name': _displayNameController.text.trim(),
-          'role': 'user',
-          'status': 'active',
-        });
+      final session = res.session;
 
-        setState(() { loading = false; });
-
-        if (mounted) {
-          showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (BuildContext context) {
-              return AlertDialog(
-                title: Text('Success'),
-                content: Text('Successfully registered.'),
-                actions: <Widget>[
-                  TextButton(
-                    child: Text('OK'),
-                    onPressed: () {
-                      Navigator.of(context).pop(); // Dismiss dialog
-                      Navigator.of(context).pop(); // Return to login screen
-                    },
-                  ),
-                ],
-              );
-            },
-          );
-        }
-      } else {
-        // Handle case where email confirmation is required
-        setState(() {
-          loading = false;
-        });
-
-        if (mounted) {
-           showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (BuildContext context) {
-              return AlertDialog(
-                title: Text('Registration Sent'),
-                content: Text('Please check your email to complete registration.'),
-                actions: <Widget>[
-                  TextButton(
-                    child: Text('OK'),
-                    onPressed: () {
-                      Navigator.of(context).pop(); // Dismiss dialog
-                      Navigator.of(context).pop(); // Return to login screen
-                    },
-                  ),
-                ],
-              );
-            },
-          );
-        }
+      // If email confirmation is ON, session will be null.
+      if (session == null) {
+        if (!mounted) return;
+        await showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text("Verify email"),
+            content: const Text(
+              "We sent you a confirmation email.\n\nAfter confirming, come back and login.",
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text("OK"),
+              ),
+            ],
+          ),
+        );
+        if (mounted) Navigator.pop(context); // back to login
+        return;
       }
+
+      // If confirmation is OFF, you're logged in already.
+      if (mounted) Navigator.pop(context); // AuthGate will route
+
     } on AuthException catch (e) {
-      setState(() {
-        error = e.message;
-        loading = false;
-      });
+      setState(() => error = e.message);
     } catch (e) {
-      setState(() {
-        // Provide more detailed error information
-        error = 'An unexpected error occurred: ${e.toString()}';
-        loading = false;
-      });
+      setState(() => error = e.toString());
+    } finally {
+      if (mounted) setState(() => loading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Register')),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: SingleChildScrollView(
-          child: Column(
-            children: [
-              TextField(controller: _emailController, decoration: InputDecoration(labelText: 'Email')),
-              TextField(controller: _passwordController, decoration: InputDecoration(labelText: 'Password'), obscureText: true),
-              TextField(controller: _usernameController, decoration: InputDecoration(labelText: 'Username')),
-              TextField(controller: _displayNameController, decoration: InputDecoration(labelText: 'Display Name')),
-              SizedBox(height: 12),
-              ElevatedButton(onPressed: loading ? null : signUpWithEmail, child: Text('Register')),
-              if (loading) Padding(padding: const EdgeInsets.only(top: 16.0), child: CircularProgressIndicator()),
-              if (error != null) Padding(padding: const EdgeInsets.only(top: 8.0), child: Text(error!, style: TextStyle(color: Colors.red))),
-            ],
+      appBar: AppBar(title: const Text("Create account")),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Card(
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      "Join Anonymous Social",
+                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 14),
+
+                    TextField(
+                      controller: email,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(
+                        labelText: "Email",
+                        prefixIcon: Icon(Icons.email_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: pass,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: "Password",
+                        prefixIcon: Icon(Icons.lock_outline),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    if (error != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Text(error!, style: const TextStyle(color: Colors.red)),
+                      ),
+
+                    SizedBox(
+                      width: double.infinity,
+                      height: 48,
+                      child: FilledButton(
+                        onPressed: loading ? null : signup,
+                        child: loading
+                            ? const SizedBox(
+                                height: 18,
+                                width: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Text("Sign up"),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      "Tip: For testing multiple users quickly, disable email confirmation in Supabase Auth settings.",
+                      style: TextStyle(color: Colors.grey, fontSize: 12),
+                      textAlign: TextAlign.center,
+                    )
+                  ],
+                ),
+              ),
+            ),
           ),
         ),
       ),
