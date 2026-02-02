@@ -20,14 +20,15 @@ Future<void> showPostComposerSheet({
         duration: const Duration(milliseconds: 180),
         curve: Curves.easeOut,
         padding: EdgeInsets.only(bottom: bottomInset),
-        child: const _PostComposerSheet(),
+        child: _PostComposerSheet(categoryId: categoryId),
       );
     },
   );
 }
 
 class _PostComposerSheet extends StatefulWidget {
-  const _PostComposerSheet();
+  final int categoryId;
+  const _PostComposerSheet({required this.categoryId});
 
   @override
   State<_PostComposerSheet> createState() => _PostComposerSheetState();
@@ -42,36 +43,12 @@ class _PostComposerSheetState extends State<_PostComposerSheet> {
   // Image state
   XFile? _pickedFile;
   Uint8List? _pickedBytes;
-  String? _pickedExt; // "jpg", "png", etc.
-
-  // Save (bookmark) isn’t here; it’s on post card.
-  // This composer only creates a post.
+  String? _pickedExt;
 
   @override
   void dispose() {
     _captionController.dispose();
     super.dispose();
-  }
-
-  int get _categoryId {
-    // We need categoryId passed into showPostComposerSheet, but this widget is created
-    // without arguments because showModalBottomSheet builder doesn't pass it in directly.
-    // We'll read it from the route's arguments isn't possible here.
-    //
-    // So the simplest approach is: store categoryId in a static, or pass it in.
-    // We'll pass it in via InheritedWidget pattern? Too heavy.
-    //
-    // Instead: We read it from a hidden value placed in Navigator? Not good.
-    //
-    // ✅ Practical approach: fetch it from a temporary value stored in the sheet context.
-    // We attach it via ModalRoute settings? Not accessible.
-    //
-    // Therefore: easiest is to put categoryId into a "ComposerArgs" inherited widget.
-    //
-    // But you asked for full code without additional files. So we will use a hack:
-    // We'll read categoryId from a closure by storing it in a static variable before
-    // opening the sheet. This is safe enough for single sheet usage.
-    return _ComposerArgs.categoryId;
   }
 
   Future<void> _pickImage() async {
@@ -117,7 +94,6 @@ class _PostComposerSheetState extends State<_PostComposerSheet> {
     if (lower.endsWith('.jpeg')) return 'jpeg';
     if (lower.endsWith('.jpg')) return 'jpg';
     if (lower.endsWith('.gif')) return 'gif';
-    // default to jpg if unknown
     return 'jpg';
   }
 
@@ -136,46 +112,7 @@ class _PostComposerSheetState extends State<_PostComposerSheet> {
     }
   }
 
-  Future<String?> _uploadPickedImage({
-    required String userId,
-  }) async {
-    if (_pickedBytes == null) return null;
-
-    final bucket = 'post_media';
-    final ext = _pickedExt ?? 'jpg';
-    final contentType = _contentTypeForExt(ext);
-
-    final fileName = '${DateTime.now().millisecondsSinceEpoch}.$ext';
-    final path = '$userId/$fileName';
-
-    try {
-      // Most reliable cross-platform upload for Flutter web + mobile:
-      await _supabase.storage.from(bucket).uploadBinary(
-            path,
-            _pickedBytes!,
-            fileOptions: FileOptions(
-              upsert: true,
-              contentType: contentType,
-            ),
-          );
-
-      // If bucket is PUBLIC:
-      final publicUrl = _supabase.storage.from(bucket).getPublicUrl(path);
-      return publicUrl;
-    } catch (e, st) {
-      debugPrint('UPLOAD ERROR: $e');
-      debugPrint('$st');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Upload failed: $e')),
-        );
-      }
-      rethrow; // surface error to caller if needed
-    }
-  }
-
   Future<void> _ensureAnonIdentity(String userId) async {
-    // If you already have this RPC, great. If not, it will fail silently.
     try {
       await _supabase.rpc('ensure_anon_identity', params: {'p_user_id': userId});
     } catch (_) {
@@ -187,6 +124,9 @@ class _PostComposerSheetState extends State<_PostComposerSheet> {
     if (_posting) return;
 
     final user = _supabase.auth.currentUser;
+    debugPrint('UPLOAD currentUser: ${user?.id}');
+    debugPrint('UPLOAD accessToken null? ${_supabase.auth.currentSession?.accessToken == null}');
+
     if (user == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please login before posting.')),
@@ -200,6 +140,13 @@ class _PostComposerSheetState extends State<_PostComposerSheet> {
     if (caption.isEmpty && !hasImage) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Write something or add a photo.')),
+      );
+      return;
+    }
+
+    if (widget.categoryId <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invalid category. Please select a valid category.')),
       );
       return;
     }
@@ -218,12 +165,13 @@ class _PostComposerSheetState extends State<_PostComposerSheet> {
         final fileName = '${DateTime.now().millisecondsSinceEpoch}.$ext';
         mediaPath = '${user.id}/$fileName';
 
-        // uploadBinary
+        debugPrint('UPLOAD media path: $mediaPath');
+
         await _supabase.storage.from(bucket).uploadBinary(
               mediaPath,
               _pickedBytes!,
               fileOptions: FileOptions(
-                upsert: true,
+                upsert: false, // important: avoid needing UPDATE policy
                 contentType: _contentTypeForExt(ext),
               ),
             );
@@ -231,10 +179,9 @@ class _PostComposerSheetState extends State<_PostComposerSheet> {
         mediaUrl = _supabase.storage.from(bucket).getPublicUrl(mediaPath);
       }
 
-      // Insert post
       await _supabase.from('posts').insert({
         'user_id': user.id,
-        'category_id': _categoryId,
+        'category_id': widget.categoryId,
         'content': caption,
         'is_deleted': false,
         'media_url': mediaUrl,
@@ -242,7 +189,7 @@ class _PostComposerSheetState extends State<_PostComposerSheet> {
       });
 
       if (!mounted) return;
-      Navigator.of(context).pop(); // close sheet
+      Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Posted ✅')),
       );
@@ -260,14 +207,14 @@ class _PostComposerSheetState extends State<_PostComposerSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final canPost = !_posting &&
+        (_captionController.text.trim().isNotEmpty || _pickedBytes != null);
+
     return DraggableScrollableSheet(
       initialChildSize: 0.72,
       minChildSize: 0.45,
       maxChildSize: 0.95,
       builder: (context, scrollController) {
-        final canPost = !_posting &&
-            (_captionController.text.trim().isNotEmpty || _pickedBytes != null);
-
         return Container(
           decoration: const BoxDecoration(
             color: Colors.white,
@@ -286,7 +233,6 @@ class _PostComposerSheetState extends State<_PostComposerSheet> {
               ),
               const SizedBox(height: 10),
 
-              // Header row
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: Row(
@@ -325,7 +271,6 @@ class _PostComposerSheetState extends State<_PostComposerSheet> {
                   controller: scrollController,
                   padding: const EdgeInsets.all(14),
                   children: [
-                    // Caption box
                     TextField(
                       controller: _captionController,
                       onChanged: (_) => setState(() {}),
@@ -347,7 +292,6 @@ class _PostComposerSheetState extends State<_PostComposerSheet> {
                     ),
                     const SizedBox(height: 12),
 
-                    // Image picker tile / preview
                     if (_pickedBytes == null) ...[
                       InkWell(
                         onTap: _posting ? null : _pickImage,
@@ -397,7 +341,8 @@ class _PostComposerSheetState extends State<_PostComposerSheet> {
                                   borderRadius: BorderRadius.circular(999),
                                   child: const Padding(
                                     padding: EdgeInsets.all(8),
-                                    child: Icon(Icons.close, color: Colors.white, size: 18),
+                                    child: Icon(Icons.close,
+                                        color: Colors.white, size: 18),
                                   ),
                                 ),
                               ),
@@ -413,18 +358,6 @@ class _PostComposerSheetState extends State<_PostComposerSheet> {
                         style: const TextStyle(color: Colors.black54, fontSize: 12),
                       ),
                     ],
-
-                    const SizedBox(height: 24),
-
-                    // Hint box (helps debug)
-                    const Text(
-                      'If upload fails, check:\n'
-                      '• Storage bucket name: post_media\n'
-                      '• Bucket is Public OR you use signed URLs\n'
-                      '• Storage Policies allow INSERT for authenticated users\n'
-                      '• (Web) CORS allowed origins include http://localhost:*',
-                      style: TextStyle(color: Colors.black54, fontSize: 12, height: 1.35),
-                    ),
                   ],
                 ),
               ),
@@ -435,19 +368,3 @@ class _PostComposerSheetState extends State<_PostComposerSheet> {
     );
   }
 }
-
-/// Simple static args holder so _PostComposerSheet can access categoryId
-/// without adding more files.
-/// We set it right before opening the sheet.
-class _ComposerArgs {
-  static int categoryId = 0;
-}
-
-/// IMPORTANT:
-/// Update your HomeShell call to set categoryId before opening the sheet:
-///
-/// _ComposerArgs.categoryId = widget.categoryId;
-/// await showPostComposerSheet(context: context, categoryId: widget.categoryId);
-///
-/// BUT since showPostComposerSheet already receives categoryId,
-/// we set it inside showPostComposerSheet below.
