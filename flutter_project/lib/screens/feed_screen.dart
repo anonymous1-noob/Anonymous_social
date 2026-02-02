@@ -18,117 +18,44 @@ class FeedScreen extends StatefulWidget {
 class _FeedScreenState extends State<FeedScreen> {
   final supabase = Supabase.instance.client;
 
+  // Current user
   String? _currentUserId;
   StreamSubscription<AuthState>? _authSub;
 
-  // ---------- Inline Create Post ----------
-  final TextEditingController _createPostController = TextEditingController();
-  bool _posting = false;
-
-  // ---------- Identity cache ----------
-  final Map<String, Map<String, dynamic>> _identityByUser = {};
-  bool _ensuredMyIdentity = false;
-  bool _loadingIdentities = false;
-
-  // ---------- Realtime likes state (posts) ----------
-  RealtimeChannel? _likesChannel;
-  final Map<String, int> _likeCountByPost = {};
-  final Set<String> _likedByMe = {};
-  bool _likesLoaded = false;
-
-  // ---------- Feed inline comment expansion ----------
-  final Map<String, int> _visibleCommentsCountByPost = {}; // postId -> visible count
-
-  // ---------- Instagram-like per-post UI state ----------
-  final Set<String> _expandedCaptions = {};
-  final Set<String> _savedPosts = {};
-  final Map<String, bool> _heartBurst = {};
-  final Map<String, Timer> _heartTimers = {};
-  final Map<String, TextEditingController> _commentCtrlByPost = {};
-  final Map<String, bool> _sendingCommentByPost = {};
-
-  // ---------- Nested replies preview inside feed ----------
-  final Set<String> _expandedRepliesForParent = {}; // parentCommentId
-  final Map<String, int> _visibleRepliesCountByParent = {}; // parentCommentId -> visible replies
+  // Like cache for posts (optimistic feel)
+  final Set<String> _likedPostIds = {};
+  final Map<String, int> _postLikeCounts = {};
 
   bool _refreshing = false;
+  bool _ensuredMyIdentity = false;
+
+  // Identity cache
+  final Map<String, Map<String, dynamic>> _identityByUser = {};
+  bool _loadingIdentities = false;
+
+  // Comment pagination/expand state
+  final Set<String> _expandedParents = {};
+  final Map<String, int> _visibleRepliesCountByParent = {};
+  final Set<String> _expandedRepliesForParent = {};
 
   @override
   void initState() {
     super.initState();
-    _currentUserId = supabase.auth.currentSession?.user.id;
 
-    _authSub = supabase.auth.onAuthStateChange.listen((event) {
-      setState(() {
-        _currentUserId = supabase.auth.currentSession?.user.id;
-
-        _ensuredMyIdentity = false;
-        _identityByUser.clear();
-
-        _likeCountByPost.clear();
-        _likedByMe.clear();
-        _likesLoaded = false;
-
-        _visibleCommentsCountByPost.clear();
-        _commentCtrlByPost.values.forEach((c) => c.dispose());
-        _commentCtrlByPost.clear();
-        _sendingCommentByPost.clear();
-
-        _expandedRepliesForParent.clear();
-        _visibleRepliesCountByParent.clear();
-      });
-
-      _setupLikesRealtime();
+    _currentUserId = supabase.auth.currentUser?.id;
+    _authSub = supabase.auth.onAuthStateChange.listen((data) {
+      final user = data.session?.user;
+      setState(() => _currentUserId = user?.id);
+      _fetchInitialLikes();
     });
 
-    _setupLikesRealtime();
+    _fetchInitialLikes();
   }
 
   @override
   void dispose() {
     _authSub?.cancel();
-    _likesChannel?.unsubscribe();
-    _createPostController.dispose();
-
-    for (final t in _heartTimers.values) {
-      t.cancel();
-    }
-    _heartTimers.clear();
-    _commentCtrlByPost.values.forEach((c) => c.dispose());
     super.dispose();
-  }
-
-  // ===================== Identity helpers =====================
-  Color _parseHexColor(String hex) {
-    final cleaned = hex.replaceAll('#', '');
-    return Color(int.parse('FF$cleaned', radix: 16));
-  }
-
-  Color _fallbackAvatarColor(String userId) {
-    final hash = userId.hashCode.abs();
-    const palette = [
-      0xFFEF5350,
-      0xFFAB47BC,
-      0xFF5C6BC0,
-      0xFF29B6F6,
-      0xFF26A69A,
-      0xFF9CCC65,
-      0xFFFFCA28,
-      0xFFFF7043,
-    ];
-    return Color(palette[hash % palette.length]);
-  }
-
-  String _fallbackAnonLabel(String userId) {
-    final short = userId.replaceAll('-', '').toUpperCase();
-    final tag = short.length >= 6 ? short.substring(0, 6) : short;
-    return 'Anon #$tag';
-  }
-
-  String _initialsFromLabel(String label) {
-    final letters = label.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
-    if (letters.length >= 2) return letters.substring(0, 2).toUpperCase();
-    return 'AN';
   }
 
   Future<void> _ensureMyAnonIdentity() async {
@@ -136,225 +63,99 @@ class _FeedScreenState extends State<FeedScreen> {
     final me = _currentUserId;
     if (me == null) return;
 
-    try {
-      await supabase.rpc('get_my_anon_identity', params: {
-        'category_id_input': widget.categoryId,
-      });
-    } catch (_) {}
     _ensuredMyIdentity = true;
-  }
-
-  Future<void> _loadIdentitiesForUsers(Set<String> userIds) async {
-    if (_loadingIdentities) return;
-    if (userIds.isEmpty) return;
-
-    final missing = userIds.where((u) => !_identityByUser.containsKey(u)).toList();
-    if (missing.isEmpty) return;
-
-    _loadingIdentities = true;
     try {
-      final rows = await supabase
-          .from('user_anonymous_identity')
-          .select('user_id, category_id, anon_name, color_hex, avatar_seed')
-          .eq('category_id', widget.categoryId)
-          .inFilter('user_id', missing);
-
-      for (final r in rows) {
-        final uid = (r['user_id'] ?? '').toString();
-        if (uid.isNotEmpty) _identityByUser[uid] = Map<String, dynamic>.from(r);
-      }
-
-      if (mounted) setState(() {});
+      await supabase.rpc('ensure_anon_identity', params: {'p_user_id': me});
     } catch (_) {
       // ignore
-    } finally {
-      _loadingIdentities = false;
     }
   }
 
-  String _displayNameForUser(String userId) {
-    final identity = _identityByUser[userId];
-    if (identity != null) {
-      final name = (identity['anon_name'] ?? '').toString().trim();
-      if (name.isNotEmpty) return name;
-    }
-    return _fallbackAnonLabel(userId);
-  }
-
-  Color _displayColorForUser(String userId) {
-    final identity = _identityByUser[userId];
-    if (identity != null) {
-      final hex = (identity['color_hex'] ?? '').toString().trim();
-      if (hex.isNotEmpty) {
-        try {
-          return _parseHexColor(hex);
-        } catch (_) {}
-      }
-    }
-    return _fallbackAvatarColor(userId);
-  }
-
-  // ===================== Time helpers =====================
-  String _timeAgo(dynamic createdAtValue) {
-    if (createdAtValue == null) return '';
-    try {
-      final utc = DateTime.parse(createdAtValue.toString()).toUtc();
-      final local = utc.toLocal();
-      final diff = DateTime.now().difference(local);
-
-      if (diff.inSeconds < 10) return 'now';
-      if (diff.inSeconds < 60) return '${diff.inSeconds}s';
-      if (diff.inMinutes < 60) return '${diff.inMinutes}m';
-      if (diff.inHours < 24) return '${diff.inHours}h';
-      if (diff.inDays < 7) return '${diff.inDays}d';
-
-      return '${local.day.toString().padLeft(2, '0')}-'
-          '${local.month.toString().padLeft(2, '0')}-'
-          '${local.year}';
-    } catch (_) {
-      return '';
-    }
-  }
-
-  bool _isEdited(Map<String, dynamic> row) {
-    final created = row['created_at'];
-    final updated = row['updated_at'];
-    if (created == null || updated == null) return false;
-    try {
-      final c = DateTime.parse(created.toString()).toUtc();
-      final u = DateTime.parse(updated.toString()).toUtc();
-      return u.difference(c).inSeconds > 2;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  // ===================== Likes: fetch + realtime (posts) =====================
+  // ✅ FIX: table name is post_likes (not posts_likes)
   Future<void> _fetchInitialLikes() async {
+    final me = _currentUserId;
+    if (me == null) return;
+
     try {
-      final rows = await supabase.from('post_likes').select('id, post_id, user_id');
+      final likes = await supabase.from('post_likes').select('post_id, user_id');
 
-      _likeCountByPost.clear();
-      _likedByMe.clear();
+      final Set<String> liked = {};
+      final Map<String, int> counts = {};
 
-      final me = _currentUserId;
-      for (final r in rows) {
-        final pid = (r['post_id'] ?? '').toString();
-        final uid = (r['user_id'] ?? '').toString();
+      for (final row in likes) {
+        final pid = (row['post_id'] ?? '').toString();
         if (pid.isEmpty) continue;
 
-        _likeCountByPost[pid] = (_likeCountByPost[pid] ?? 0) + 1;
-        if (me != null && uid == me) _likedByMe.add(pid);
+        counts[pid] = (counts[pid] ?? 0) + 1;
+
+        final uid = (row['user_id'] ?? '').toString();
+        if (uid == me) liked.add(pid);
       }
 
-      if (mounted) setState(() => _likesLoaded = true);
-    } catch (_) {
-      if (mounted) setState(() => _likesLoaded = true);
+      if (!mounted) return;
+      setState(() {
+        _likedPostIds
+          ..clear()
+          ..addAll(liked);
+
+        _postLikeCounts
+          ..clear()
+          ..addAll(counts);
+      });
+    } catch (e, st) {
+      debugPrint('FETCH LIKES ERROR: $e');
+      debugPrint('$st');
     }
   }
 
-  void _applyLikeInsert(Map<String, dynamic> row) {
-    final pid = (row['post_id'] ?? '').toString();
-    final uid = (row['user_id'] ?? '').toString();
-    if (pid.isEmpty) return;
-
-    _likeCountByPost[pid] = (_likeCountByPost[pid] ?? 0) + 1;
-
-    final me = _currentUserId;
-    if (me != null && uid == me) _likedByMe.add(pid);
-  }
-
-  void _applyLikeDelete(Map<String, dynamic> oldRow) {
-    final pid = (oldRow['post_id'] ?? '').toString();
-    final uid = (oldRow['user_id'] ?? '').toString();
-    if (pid.isEmpty) return;
-
-    final current = _likeCountByPost[pid] ?? 0;
-    final next = current - 1;
-    _likeCountByPost[pid] = next < 0 ? 0 : next;
-
-    final me = _currentUserId;
-    if (me != null && uid == me) _likedByMe.remove(pid);
-  }
-
-  Future<void> _setupLikesRealtime() async {
-    await _likesChannel?.unsubscribe();
-    _likesChannel = null;
-
-    await _fetchInitialLikes();
-
-    final channel = supabase.channel('realtime:post_likes');
-
-    channel.onPostgresChanges(
-      event: PostgresChangeEvent.insert,
-      schema: 'public',
-      table: 'post_likes',
-      callback: (payload) {
-        final newRow = payload.newRecord;
-        if (newRow != null && mounted) {
-          setState(() => _applyLikeInsert(Map<String, dynamic>.from(newRow)));
-        }
-      },
-    );
-
-    channel.onPostgresChanges(
-      event: PostgresChangeEvent.delete,
-      schema: 'public',
-      table: 'post_likes',
-      callback: (payload) {
-        final oldRow = payload.oldRecord;
-        if (oldRow != null && mounted) {
-          setState(() => _applyLikeDelete(Map<String, dynamic>.from(oldRow)));
-        } else {
-          _fetchInitialLikes();
-        }
-      },
-    );
-
-    _likesChannel = channel;
-    channel.subscribe();
-  }
-
-  void _needLoginSnack() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Please login to perform this action')),
-    );
-  }
-
+  // ✅ FIX: table name is post_likes (not posts_likes)
   Future<void> _togglePostLike(String postId) async {
     final me = _currentUserId;
-    if (me == null) {
-      _needLoginSnack();
-      return;
-    }
+    if (me == null) return;
 
-    // optimistic update
-    final wasLiked = _likedByMe.contains(postId);
+    final wasLiked = _likedPostIds.contains(postId);
+
+    // Optimistic update
     setState(() {
       if (wasLiked) {
-        _likedByMe.remove(postId);
-        _likeCountByPost[postId] = (_likeCountByPost[postId] ?? 0) - 1;
-        if ((_likeCountByPost[postId] ?? 0) < 0) _likeCountByPost[postId] = 0;
+        _likedPostIds.remove(postId);
+        final current = _postLikeCounts[postId] ?? 0;
+        _postLikeCounts[postId] = (current - 1).clamp(0, 1 << 30);
       } else {
-        _likedByMe.add(postId);
-        _likeCountByPost[postId] = (_likeCountByPost[postId] ?? 0) + 1;
+        _likedPostIds.add(postId);
+        final current = _postLikeCounts[postId] ?? 0;
+        _postLikeCounts[postId] = current + 1;
       }
     });
 
     try {
-      await supabase.rpc('toggle_post_like', params: {
-        'post_id_input': postId,
-      });
-    } catch (e) {
-      // revert
+      if (wasLiked) {
+        await supabase.from('post_likes').delete().match({
+          'post_id': postId,
+          'user_id': me,
+        });
+      } else {
+        // Uses upsert so duplicate likes don't throw
+        await supabase.from('post_likes').upsert(
+          {'post_id': postId, 'user_id': me},
+          onConflict: 'post_id,user_id',
+        );
+      }
+    } catch (e, st) {
+      debugPrint('LIKE TOGGLE ERROR: $e');
+      debugPrint('$st');
+
+      // Revert UI if backend failed
+      if (!mounted) return;
       setState(() {
         if (wasLiked) {
-          _likedByMe.add(postId);
-          _likeCountByPost[postId] = (_likeCountByPost[postId] ?? 0) + 1;
+          _likedPostIds.add(postId);
+          final current = _postLikeCounts[postId] ?? 0;
+          _postLikeCounts[postId] = current + 1;
         } else {
-          _likedByMe.remove(postId);
-          _likeCountByPost[postId] = (_likeCountByPost[postId] ?? 0) - 1;
-          if ((_likeCountByPost[postId] ?? 0) < 0) _likeCountByPost[postId] = 0;
+          _likedPostIds.remove(postId);
+          final current = _postLikeCounts[postId] ?? 0;
+          _postLikeCounts[postId] = (current - 1).clamp(0, 1 << 30);
         }
       });
 
@@ -364,128 +165,81 @@ class _FeedScreenState extends State<FeedScreen> {
     }
   }
 
-  // ===================== Likes: inline (comments) =====================
-  Future<void> _toggleCommentLike(String commentId) async {
-    final me = _currentUserId;
-    if (me == null) {
-      _needLoginSnack();
-      return;
-    }
+  Future<void> _loadIdentitiesForUsers(Set<String> userIds) async {
+    if (_loadingIdentities) return;
+    final missing = userIds.where((u) => !_identityByUser.containsKey(u)).toList();
+    if (missing.isEmpty) return;
 
+    _loadingIdentities = true;
     try {
-      await supabase.rpc('toggle_comment_like', params: {
-        'comment_id_input': commentId,
-      });
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Comment like failed: $e')),
-      );
-    }
-  }
+      final res = await supabase
+          .from('anon_identities')
+          .select('user_id, display_name, avatar_color')
+          .inFilter('user_id', missing);
 
-  // ===================== Inline Create Post =====================
-  Future<void> _createPost() async {
-    final me = _currentUserId;
-    if (me == null) {
-      _needLoginSnack();
-      return;
-    }
-    final text = _createPostController.text.trim();
-    if (text.isEmpty) return;
-    if (_posting) return;
-
-    setState(() => _posting = true);
-    try {
-      await _ensureMyAnonIdentity();
-
-      await supabase.from('posts').insert({
-        'content': text,
-        'user_id': me,
-        'category_id': widget.categoryId,
-        'is_deleted': false,
-      });
-
-      _createPostController.clear();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Posted ✅")),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Post failed: $e")),
-      );
-    } finally {
-      if (mounted) setState(() => _posting = false);
-    }
-  }
-
-  // ===================== Inline comments in feed =====================
-  TextEditingController _commentControllerForPost(String postId) {
-    return _commentCtrlByPost.putIfAbsent(postId, () => TextEditingController());
-  }
-
-  Future<void> _addInlineComment(String postId) async {
-    final me = _currentUserId;
-    if (me == null) {
-      _needLoginSnack();
-      return;
-    }
-
-    final ctrl = _commentControllerForPost(postId);
-    final text = ctrl.text.trim();
-    if (text.isEmpty) return;
-
-    if (_sendingCommentByPost[postId] == true) return;
-    setState(() => _sendingCommentByPost[postId] = true);
-
-    try {
-      await _ensureMyAnonIdentity();
-
-      await supabase.from('comments').insert({
-        'post_id': postId,
-        'user_id': me,
-        'content': text,
-        'is_deleted': false,
-        'parent_comment_id': null,
-      });
-
-      ctrl.clear();
-
-      setState(() {
-        final current = _visibleCommentsCountByPost[postId] ?? 0;
-        _visibleCommentsCountByPost[postId] = current == 0 ? 5 : current;
-      });
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Comment failed: $e")),
-      );
-    } finally {
-      if (mounted) setState(() => _sendingCommentByPost[postId] = false);
-    }
-  }
-
-  void _toggleCommentsOpen(String postId) {
-    setState(() {
-      final current = _visibleCommentsCountByPost[postId] ?? 0;
-      if (current == 0) {
-        _visibleCommentsCountByPost[postId] = 5;
-      } else {
-        _visibleCommentsCountByPost[postId] = 0; // collapse
+      for (final row in res) {
+        final uid = (row['user_id'] ?? '').toString();
+        if (uid.isEmpty) continue;
+        _identityByUser[uid] = Map<String, dynamic>.from(row as Map);
       }
-    });
+      if (mounted) setState(() {});
+    } catch (_) {
+      // ignore
+    } finally {
+      _loadingIdentities = false;
+    }
   }
 
-  void _loadMoreComments(String postId) {
-    setState(() {
-      final current = _visibleCommentsCountByPost[postId] ?? 0;
-      _visibleCommentsCountByPost[postId] = current + 5;
-    });
+  String _displayNameForUser(String userId) {
+    final row = _identityByUser[userId];
+    final name = (row?['display_name'] ?? '').toString().trim();
+    if (name.isNotEmpty) return name;
+    return 'Anon';
   }
 
-  // ---------- replies preview toggles ----------
-  void _toggleRepliesForParent(String parentCommentId) {
+  Color _avatarColorForUser(String userId) {
+    final row = _identityByUser[userId];
+    final raw = row?['avatar_color'];
+    if (raw is int) return Color(raw);
+    if (raw is String) {
+      final parsed = int.tryParse(raw);
+      if (parsed != null) return Color(parsed);
+    }
+    return const Color(0xFF94A3B8);
+  }
+
+  String _initials(String name) {
+    final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return '?';
+    if (parts.length == 1) return parts.first.characters.first.toUpperCase();
+    return (parts.first.characters.first + parts.last.characters.first).toUpperCase();
+  }
+
+  String _timeAgo(dynamic createdAt) {
+    try {
+      if (createdAt == null) return '';
+      final dt = DateTime.tryParse(createdAt.toString());
+      if (dt == null) return '';
+      final diff = DateTime.now().difference(dt.toLocal());
+
+      if (diff.inSeconds < 60) return '${diff.inSeconds}s';
+      if (diff.inMinutes < 60) return '${diff.inMinutes}m';
+      if (diff.inHours < 24) return '${diff.inHours}h';
+      if (diff.inDays < 7) return '${diff.inDays}d';
+      final weeks = (diff.inDays / 7).floor();
+      if (weeks < 5) return '${weeks}w';
+      final months = (diff.inDays / 30).floor();
+      if (months < 12) return '${months}mo';
+      final years = (diff.inDays / 365).floor();
+      return '${years}y';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  void _toggleRepliesExpanded(String parentCommentId) {
     setState(() {
-      final expanded = _expandedRepliesForParent.contains(parentCommentId);
-      if (expanded) {
+      if (_expandedRepliesForParent.contains(parentCommentId)) {
         _expandedRepliesForParent.remove(parentCommentId);
       } else {
         _expandedRepliesForParent.add(parentCommentId);
@@ -501,47 +255,61 @@ class _FeedScreenState extends State<FeedScreen> {
     });
   }
 
-  // ===================== Edit/Delete/Report Posts =====================
   Future<void> _showPostMenu(Map<String, dynamic> post) async {
     final postId = (post['id'] ?? '').toString();
-    final authorId = (post['user_id'] ?? '').toString();
-    final isMine = _currentUserId != null && authorId == _currentUserId;
+    final me = _currentUserId;
+    final postUserId = (post['user_id'] ?? '').toString();
+    final isMine = me != null && postUserId == me;
 
     final action = await showModalBottomSheet<String>(
       context: context,
-      showDragHandle: true,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (isMine)
-              ListTile(
-                leading: const Icon(Icons.edit),
-                title: const Text("Edit post"),
-                onTap: () => Navigator.pop(context, 'edit'),
-              ),
-            if (isMine)
-              ListTile(
-                leading: const Icon(Icons.delete_outline, color: Colors.red),
-                title: const Text("Delete post", style: TextStyle(color: Colors.red)),
-                onTap: () => Navigator.pop(context, 'delete'),
-              ),
-            if (!isMine)
-              ListTile(
-                leading: const Icon(Icons.flag_outlined),
-                title: const Text("Report"),
-                onTap: () => Navigator.pop(context, 'report'),
-              ),
-            const SizedBox(height: 8),
-          ],
-        ),
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
+      builder: (ctx) {
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 42,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE5E7EB),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                ListTile(
+                  leading: const Icon(Icons.flag_outlined),
+                  title: const Text('Report'),
+                  onTap: () => Navigator.pop(ctx, 'report'),
+                ),
+                if (isMine) ...[
+                  ListTile(
+                    leading: const Icon(Icons.delete_outline),
+                    title: const Text('Delete'),
+                    onTap: () => Navigator.pop(ctx, 'delete'),
+                  ),
+                ],
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        );
+      },
     );
 
-    if (action == 'edit') {
-      await _editPostDialog(post);
-    } else if (action == 'delete') {
-      await _deletePostConfirm(postId);
+    if (action == null) return;
+
+    if (action == 'delete') {
+      try {
+        await supabase.from('posts').update({'is_deleted': true}).eq('id', postId);
+      } catch (_) {}
     } else if (action == 'report') {
       await showReportDialog(
         context: context,
@@ -551,123 +319,380 @@ class _FeedScreenState extends State<FeedScreen> {
     }
   }
 
-  Future<void> _editPostDialog(Map<String, dynamic> post) async {
-    final postId = (post['id'] ?? '').toString();
-    final initial = (post['content'] ?? '').toString();
-    final controller = TextEditingController(text: initial);
-
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text("Edit post"),
-        content: TextField(
-          controller: controller,
-          maxLines: 6,
-          decoration: const InputDecoration(hintText: "Update your post..."),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text("Save")),
-        ],
-      ),
-    );
-
-    if (saved != true) return;
-
-    final newText = controller.text.trim();
-    if (newText.isEmpty) return;
-
-    try {
-      await supabase.rpc('edit_post', params: {
-        'post_id_input': postId,
-        'content_input': newText,
-      });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Post updated ✅")));
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Edit failed: $e")));
-    }
-  }
-
-  Future<void> _deletePostConfirm(String postId) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text("Delete post?"),
-        content: const Text("This will remove the post from feed (soft delete)."),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text("Delete"),
-          ),
-        ],
-      ),
-    );
-
-    if (ok != true) return;
-
-    try {
-      await supabase.rpc('soft_delete_post', params: {
-        'post_id_input': postId,
-      });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Post deleted ✅")));
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Delete failed: $e")));
-    }
-  }
-
-  // ===================== Left sidebar =====================
   Widget _leftSidebar(BuildContext context, {required bool isWide}) {
-    final items = [
-      _SideItem(icon: Icons.people_alt_outlined, label: "Friends"),
-      _SideItem(icon: Icons.star_border, label: "Favourites"),
-      _SideItem(icon: Icons.category_outlined, label: "Categories"),
-      _SideItem(icon: Icons.bookmark_border, label: "Saved"),
-      _SideItem(icon: Icons.settings_outlined, label: "Settings"),
-    ];
-
+    final width = isWide ? 280.0 : double.infinity;
     return Container(
-      width: isWide ? 280 : 220,
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(
-          right: BorderSide(color: Colors.grey.shade200),
-        ),
-      ),
+      width: width,
+      color: Colors.white,
+      padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(height: 6),
-          const Text(
-            "Menu",
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-          ),
+          const Text("Explore", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 10),
+          _sidebarItem(icon: Icons.people_outline, label: "Friends", onTap: () {}),
+          _sidebarItem(icon: Icons.star_border, label: "Favourite", onTap: () {}),
+          _sidebarItem(icon: Icons.category_outlined, label: "Categories", onTap: () {}),
+          _sidebarItem(icon: Icons.bookmark_border, label: "Saved", onTap: () {}),
           const SizedBox(height: 12),
-          for (final it in items)
-            ListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(it.icon),
-              title: Text(it.label, style: const TextStyle(fontWeight: FontWeight.w600)),
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text("${it.label} (next)")),
-                );
-              },
-            ),
+          const Divider(height: 1),
+          const SizedBox(height: 12),
+          _sidebarItem(icon: Icons.settings_outlined, label: "Settings", onTap: () {}),
           const Spacer(),
-          const Text(
-            "Next: categories will filter feed here.",
-            style: TextStyle(fontSize: 12, color: Colors.grey),
-          ),
+          const Text("Tip: Tap ❤️ to like, 💬 to comment.",
+              style: TextStyle(color: Colors.black54, fontSize: 12)),
         ],
       ),
     );
   }
 
-  // ===================== Build =====================
+  Widget _sidebarItem({required IconData icon, required String label, required VoidCallback onTap}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+        child: Row(
+          children: [
+            Icon(icon, color: Colors.black87),
+            const SizedBox(width: 10),
+            Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.w700))),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _captionText({
+    required String username,
+    required String caption,
+    required bool expanded,
+    required VoidCallback onToggle,
+  }) {
+    final full = '$username $caption';
+    final shouldCollapse = full.length > 140;
+
+    if (!shouldCollapse) {
+      return RichText(
+        text: TextSpan(
+          style: const TextStyle(color: Colors.black, height: 1.25),
+          children: [
+            TextSpan(text: username, style: const TextStyle(fontWeight: FontWeight.w800)),
+            TextSpan(text: ' $caption'),
+          ],
+        ),
+      );
+    }
+
+    if (expanded) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          RichText(
+            text: TextSpan(
+              style: const TextStyle(color: Colors.black, height: 1.25),
+              children: [
+                TextSpan(text: username, style: const TextStyle(fontWeight: FontWeight.w800)),
+                TextSpan(text: ' $caption'),
+              ],
+            ),
+          ),
+          const SizedBox(height: 2),
+          InkWell(
+            onTap: onToggle,
+            child: const Text('less',
+                style: TextStyle(color: Colors.black54, fontWeight: FontWeight.w700)),
+          ),
+        ],
+      );
+    }
+
+    final shortCaption = caption.length > 120 ? '${caption.substring(0, 120)}…' : caption;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        RichText(
+          text: TextSpan(
+            style: const TextStyle(color: Colors.black, height: 1.25),
+            children: [
+              TextSpan(text: username, style: const TextStyle(fontWeight: FontWeight.w800)),
+              TextSpan(text: ' $shortCaption '),
+              const TextSpan(
+                text: 'more',
+                style: TextStyle(color: Colors.black54, fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 2),
+        InkWell(onTap: onToggle, child: const SizedBox(width: double.infinity, height: 1)),
+      ],
+    );
+  }
+
+  Widget _postCard({
+    required Map<String, dynamic> post,
+    required Map<String, int> commentCountByPost,
+  }) {
+    final postId = (post['id'] ?? '').toString();
+    final authorId = (post['user_id'] ?? '').toString();
+    final content = (post['content'] ?? '').toString();
+    final editedAt = post['edited_at'];
+    final createdAt = post['created_at'];
+
+    final name = authorId.isNotEmpty ? _displayNameForUser(authorId) : 'Anon';
+    final avatarColor =
+        authorId.isNotEmpty ? _avatarColorForUser(authorId) : const Color(0xFF94A3B8);
+
+    final isLiked = _likedPostIds.contains(postId);
+    final likeCount = _postLikeCounts[postId] ?? 0;
+
+    final commentCount = commentCountByPost[postId] ?? 0;
+
+    bool expanded = false;
+    bool showHeart = false;
+    Timer? heartTimer;
+
+    void triggerHeartBurst() {
+      heartTimer?.cancel();
+      setState(() => showHeart = true);
+      heartTimer = Timer(const Duration(milliseconds: 650), () {
+        if (!mounted) return;
+        setState(() => showHeart = false);
+      });
+    }
+
+    final time = _timeAgo(createdAt);
+
+    return StatefulBuilder(
+      builder: (context, setLocal) {
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(color: Colors.grey.shade200),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(color: avatarColor, shape: BoxShape.circle),
+                      alignment: Alignment.center,
+                      child: Text(
+                        _initials(name),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(name,
+                                  style: const TextStyle(
+                                      fontSize: 14, fontWeight: FontWeight.w800)),
+                              if (editedAt != null)
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 6),
+                                  child: Text("• Edited",
+                                      style: TextStyle(fontSize: 12, color: Colors.black45)),
+                                ),
+                            ],
+                          ),
+                          if (time.isNotEmpty)
+                            Text(time,
+                                style: const TextStyle(fontSize: 12, color: Colors.black45)),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.more_horiz),
+                      splashRadius: 18,
+                      onPressed: () => _showPostMenu(post),
+                    ),
+                  ],
+                ),
+              ),
+
+              Builder(
+                builder: (_) {
+                  final mediaUrl = (post['media_url'] ?? '').toString().trim();
+                  if (mediaUrl.isEmpty) return const SizedBox.shrink();
+
+                  return GestureDetector(
+                    onDoubleTap: () {
+                      if (!isLiked) {
+                        _togglePostLike(postId);
+                      }
+                      triggerHeartBurst();
+                    },
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        AspectRatio(
+                          aspectRatio: 1,
+                          child: Image.network(
+                            mediaUrl,
+                            fit: BoxFit.cover,
+                            width: double.infinity,
+                            height: double.infinity,
+                            loadingBuilder: (context, child, progress) {
+                              if (progress == null) return child;
+                              return Container(
+                                color: const Color(0xFFF3F4F6),
+                                alignment: Alignment.center,
+                                child: const SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                              );
+                            },
+                            errorBuilder: (context, error, stack) {
+                              return Container(
+                                color: const Color(0xFFF3F4F6),
+                                alignment: Alignment.center,
+                                child: Icon(
+                                  Icons.broken_image_outlined,
+                                  size: 56,
+                                  color: Colors.black.withOpacity(0.18),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                        AnimatedOpacity(
+                          opacity: showHeart ? 1 : 0,
+                          duration: const Duration(milliseconds: 120),
+                          child: AnimatedScale(
+                            scale: showHeart ? 1.0 : 0.85,
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeOutBack,
+                            child: const Icon(
+                              Icons.favorite,
+                              color: Colors.white,
+                              size: 96,
+                              shadows: [Shadow(color: Colors.black54, blurRadius: 14)],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+
+              Padding(
+                padding: const EdgeInsets.fromLTRB(6, 8, 6, 0),
+                child: Row(
+                  children: [
+                    IconButton(
+                      splashRadius: 20,
+                      onPressed: () => _togglePostLike(postId),
+                      icon: Icon(
+                        isLiked ? Icons.favorite : Icons.favorite_border,
+                        color: isLiked ? Colors.redAccent : Colors.black87,
+                      ),
+                    ),
+                    IconButton(
+                      splashRadius: 20,
+                      onPressed: () {
+                        showCommentsSheet(
+                          context: context,
+                          postId: postId,
+                          categoryId: widget.categoryId,
+                        );
+                      },
+                      icon: const Icon(Icons.chat_bubble_outline),
+                    ),
+                    IconButton(
+                      splashRadius: 20,
+                      onPressed: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Share coming soon')),
+                        );
+                      },
+                      icon: const Icon(Icons.send_outlined),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      splashRadius: 20,
+                      onPressed: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Save coming soon')),
+                        );
+                      },
+                      icon: const Icon(Icons.bookmark_border),
+                    ),
+                  ],
+                ),
+              ),
+
+              if (likeCount > 0)
+                Padding(
+                  padding: const EdgeInsets.only(left: 12, top: 2),
+                  child: Text('$likeCount likes',
+                      style: const TextStyle(fontWeight: FontWeight.w800)),
+                ),
+
+              if (content.trim().isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: GestureDetector(
+                    onTap: () => setLocal(() => expanded = !expanded),
+                    child: _captionText(
+                      username: name,
+                      caption: content,
+                      expanded: expanded,
+                      onToggle: () => setLocal(() => expanded = !expanded),
+                    ),
+                  ),
+                ),
+              ],
+
+              if (commentCount > 0) ...[
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: InkWell(
+                    onTap: () {
+                      showCommentsSheet(
+                        context: context,
+                        postId: postId,
+                        categoryId: widget.categoryId,
+                      );
+                    },
+                    child: Text(
+                      'View all $commentCount comments',
+                      style: const TextStyle(color: Colors.black54, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+              ],
+
+              const SizedBox(height: 10),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     _ensureMyAnonIdentity();
@@ -679,6 +704,7 @@ class _FeedScreenState extends State<FeedScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isWide = constraints.maxWidth >= 900;
+        final bool showSidebar = false;
 
         return Scaffold(
           backgroundColor: const Color(0xFFF3F4F6),
@@ -697,11 +723,12 @@ class _FeedScreenState extends State<FeedScreen> {
               ),
             ],
           ),
-          drawer: isWide ? null : Drawer(child: _leftSidebar(context, isWide: false)),
+          drawer: (!showSidebar || isWide)
+              ? null
+              : Drawer(child: _leftSidebar(context, isWide: false)),
           body: Row(
             children: [
-              if (isWide) _leftSidebar(context, isWide: true),
-
+              if (showSidebar && isWide) _leftSidebar(context, isWide: true),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () async {
@@ -711,149 +738,110 @@ class _FeedScreenState extends State<FeedScreen> {
                     if (mounted) setState(() => _refreshing = false);
                   },
                   child: StreamBuilder<List<Map<String, dynamic>>>(
-                    stream: commentLikesStream,
-                    builder: (context, likesSnap) {
-                      final likes = likesSnap.data ?? [];
-                      final me = _currentUserId;
+                    stream: commentsStream,
+                    builder: (context, commentsSnap) {
+                      final allCommentsRaw = commentsSnap.data ?? [];
 
-                      final Map<String, int> likeCountByComment = {};
-                      final Set<String> likedByMeComment = {};
+                      final Map<String, int> commentCountByPost = {};
+                      final Set<String> commentUserIds = {};
 
-                      for (final l in likes) {
-                        final cid = (l['comment_id'] ?? '').toString();
-                        if (cid.isEmpty) continue;
-                        likeCountByComment[cid] = (likeCountByComment[cid] ?? 0) + 1;
+                      for (final c in allCommentsRaw) {
+                        if (c['is_deleted'] == true) continue;
 
-                        final uid = (l['user_id'] ?? '').toString();
-                        if (me != null && uid == me) likedByMeComment.add(cid);
+                        final postId = (c['post_id'] ?? '').toString();
+                        if (postId.isEmpty) continue;
+
+                        final uid = (c['user_id'] ?? '').toString();
+                        if (uid.isNotEmpty) commentUserIds.add(uid);
+
+                        final parentId = (c['parent_comment_id'] ?? '').toString();
+                        final isTopLevel = parentId.isEmpty || parentId == 'null';
+                        if (isTopLevel) {
+                          commentCountByPost[postId] = (commentCountByPost[postId] ?? 0) + 1;
+                        }
                       }
 
+                      _loadIdentitiesForUsers(commentUserIds);
+
                       return StreamBuilder<List<Map<String, dynamic>>>(
-                        stream: commentsStream,
-                        builder: (context, commentsSnap) {
-                          final allCommentsRaw = commentsSnap.data ?? [];
-
-                          // For inline preview:
-                          // - top-level comments per post (newest first)
-                          // - replies per parent comment (newest first)
-                          final Map<String, List<Map<String, dynamic>>> topLevelByPost = {};
-                          final Map<String, List<Map<String, dynamic>>> repliesByParent = {};
-                          final Set<String> commentUserIds = {};
-
-                          for (final c in allCommentsRaw) {
-                            if (c['is_deleted'] == true) continue;
-
-                            final postId = (c['post_id'] ?? '').toString();
-                            if (postId.isEmpty) continue;
-
-                            final uid = (c['user_id'] ?? '').toString();
-                            if (uid.isNotEmpty) commentUserIds.add(uid);
-
-                            final parentId = (c['parent_comment_id'] ?? '').toString();
-                            final isTopLevel = parentId.isEmpty || parentId == 'null';
-
-                            if (isTopLevel) {
-                              topLevelByPost.putIfAbsent(postId, () => []).add(c);
-                            } else {
-                              repliesByParent.putIfAbsent(parentId, () => []).add(c);
-                            }
+                        stream: postsStream,
+                        builder: (context, postsSnap) {
+                          if (postsSnap.connectionState == ConnectionState.waiting && !postsSnap.hasData) {
+                            return const Center(child: CircularProgressIndicator());
                           }
 
-                          for (final k in topLevelByPost.keys) {
-                            topLevelByPost[k]!.sort((a, b) {
-                              final aT = (a['created_at'] ?? '').toString();
-                              final bT = (b['created_at'] ?? '').toString();
-                              return bT.compareTo(aT);
-                            });
+                          if (postsSnap.hasError) {
+                            return Center(
+                              child: Text(
+                                'Error loading posts:\n${postsSnap.error}',
+                                style: const TextStyle(color: Colors.red),
+                                textAlign: TextAlign.center,
+                              ),
+                            );
                           }
 
-                          for (final k in repliesByParent.keys) {
-                            repliesByParent[k]!.sort((a, b) {
-                              final aT = (a['created_at'] ?? '').toString();
-                              final bT = (b['created_at'] ?? '').toString();
-                              return bT.compareTo(aT);
-                            });
-                          }
+                          final posts = (postsSnap.data ?? [])
+                              .where((p) => (p['is_deleted'] == false || p['is_deleted'] == null))
+                              .where((p) {
+                                if (widget.categoryId <= 0) return true;
+                                return p['category_id'] == widget.categoryId;
+                              })
+                              .toList();
 
-                          return StreamBuilder<List<Map<String, dynamic>>>(
-                            stream: postsStream,
-                            builder: (context, postsSnap) {
-                              if (postsSnap.connectionState == ConnectionState.waiting && !postsSnap.hasData) {
-                                return const Center(child: CircularProgressIndicator());
-                              }
-                              if (postsSnap.hasError) {
-                                return Center(child: Text('Error loading posts:\n${postsSnap.error}'));
-                              }
+                          posts.sort((a, b) {
+                            final aT = (a['created_at'] ?? '').toString();
+                            final bT = (b['created_at'] ?? '').toString();
+                            return bT.compareTo(aT);
+                          });
 
-                              final allPosts = postsSnap.data ?? [];
-                              final posts = allPosts
-                                  .where((p) =>
-                                      p['category_id'] == widget.categoryId &&
-                                      (p['is_deleted'] == false || p['is_deleted'] == null))
-                                  .toList()
-                                ..sort((a, b) {
-                                  final aT = (a['created_at'] ?? '').toString();
-                                  final bT = (b['created_at'] ?? '').toString();
-                                  return bT.compareTo(aT);
-                                });
-
-                              final authorIds = <String>{};
-                              for (final p in posts) {
-                                final uid = (p['user_id'] ?? '').toString();
-                                if (uid.isNotEmpty) authorIds.add(uid);
-                              }
-
-                              _loadIdentitiesForUsers({...authorIds, ...commentUserIds});
-
-                              if (!_likesLoaded) return const Center(child: CircularProgressIndicator());
-
-                              final maxWidth = isWide ? 900.0 : double.infinity;
-
-                              return ListView(
-                                padding: EdgeInsets.symmetric(
-                                  vertical: 12,
-                                  horizontal: isWide ? 18 : 12,
-                                ),
-                                children: [
-                                  Center(
-                                    child: ConstrainedBox(
-                                      constraints: BoxConstraints(maxWidth: maxWidth),
-                                      child: _createPostBox(),
-                                    ),
+                          if (posts.isEmpty) {
+                            return ListView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              padding: const EdgeInsets.symmetric(vertical: 40),
+                              children: const [
+                                SizedBox(height: 80),
+                                Icon(Icons.hourglass_empty, size: 44, color: Colors.black38),
+                                SizedBox(height: 12),
+                                Center(
+                                  child: Text(
+                                    "No posts yet",
+                                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
                                   ),
-                                  const SizedBox(height: 12),
+                                ),
+                                SizedBox(height: 6),
+                                Center(
+                                  child: Text(
+                                    "Be the first to share something.",
+                                    style: TextStyle(color: Colors.black54),
+                                  ),
+                                ),
+                              ],
+                            );
+                          }
 
-                                  if (posts.isEmpty)
-                                    Center(
-                                      child: ConstrainedBox(
-                                        constraints: BoxConstraints(maxWidth: maxWidth),
-                                        child: const Card(
-                                          child: Padding(
-                                            padding: EdgeInsets.all(18),
-                                            child: Center(child: Text("No posts yet")),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
+                          // Load like cache once per build tick is OK, but avoid loops:
+                          // We already do it on init and refresh.
 
-                                  for (final post in posts)
-                                    Center(
-                                      child: ConstrainedBox(
-                                        constraints: BoxConstraints(maxWidth: maxWidth),
-                                        child: _postCard(
-                                          post,
-                                          topLevelByPost[(post['id'] ?? '').toString()] ?? const [],
-                                          repliesByParent,
-                                          likeCountByComment,
-                                          likedByMeComment,
-                                        ),
-                                      ),
-                                    ),
+                          return Center(
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 720),
+                              child: ListView.builder(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                itemCount: posts.length,
+                                itemBuilder: (context, index) {
+                                  final post = posts[index];
 
-                                  const SizedBox(height: 18),
-                                ],
-                              );
-                            },
+                                  final uid = (post['user_id'] ?? '').toString();
+                                  if (uid.isNotEmpty) _loadIdentitiesForUsers({uid});
+
+                                  return _postCard(
+                                    post: post,
+                                    commentCountByPost: commentCountByPost,
+                                  );
+                                },
+                              ),
+                            ),
                           );
                         },
                       );
@@ -867,614 +855,4 @@ class _FeedScreenState extends State<FeedScreen> {
       },
     );
   }
-
-  // ===================== Create Post box UI =====================
-  Widget _createPostBox() {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text("Create post", style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _createPostController,
-                    maxLines: 3,
-                    decoration: const InputDecoration(
-                      hintText: "What's on your mind?",
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                _posting
-                    ? const SizedBox(
-                        height: 22,
-                        width: 22,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : FilledButton.icon(
-                        onPressed: _createPost,
-                        icon: const Icon(Icons.send),
-                        label: const Text("Post"),
-                      ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ===================== Post card UI =====================
-  
-Widget _postCard(
-    Map<String, dynamic> post,
-    List<Map<String, dynamic>> topLevelCommentsNewestFirst,
-    Map<String, List<Map<String, dynamic>>> repliesByParent,
-    Map<String, int> likeCountByComment,
-    Set<String> likedByMeComment,
-  ) {
-    final postId = (post['id'] ?? '').toString();
-    final content = (post['content'] ?? '').toString();
-    final authorId = (post['user_id'] ?? '').toString();
-
-    final name = authorId.isNotEmpty ? _displayNameForUser(authorId) : 'Anon';
-    final color = authorId.isNotEmpty ? _displayColorForUser(authorId) : Colors.grey;
-    final initials = _initialsFromLabel(name);
-
-    final time = _timeAgo(post['created_at']);
-    final edited = _isEdited(post);
-
-    final likesCount = _likeCountByPost[postId] ?? 0;
-    final isLiked = _likedByMe.contains(postId);
-
-    // Total comments (top-level + replies)
-    int totalComments = topLevelCommentsNewestFirst.length;
-    for (final parent in topLevelCommentsNewestFirst) {
-      final pid = (parent['id'] ?? '').toString();
-      totalComments += (repliesByParent[pid]?.length ?? 0);
-    }
-
-    final isCaptionExpanded = _expandedCaptions.contains(postId);
-    final isSaved = _savedPosts.contains(postId);
-    final showHeart = _heartBurst[postId] == true;
-
-    void triggerHeartBurst() {
-      _heartTimers[postId]?.cancel();
-      setState(() {
-        _heartBurst[postId] = true;
-      });
-      _heartTimers[postId] = Timer(const Duration(milliseconds: 650), () {
-        if (!mounted) return;
-        setState(() {
-          _heartBurst[postId] = false;
-        });
-      });
-    }
-
-    final bool needsMore = content.trim().length > 140;
-
-    return Card(
-      elevation: 0,
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 8, 10),
-            child: Row(
-              children: [
-                CircleAvatar(
-                  radius: 18,
-                  backgroundColor: color,
-                  child: Text(
-                    initials,
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              name,
-                              style: const TextStyle(fontWeight: FontWeight.w800),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          if (edited)
-                            const Padding(
-                              padding: EdgeInsets.only(left: 6),
-                              child: Text("• Edited", style: TextStyle(fontSize: 12, color: Colors.black45)),
-                            ),
-                        ],
-                      ),
-                      if (time.isNotEmpty)
-                        Text(time, style: const TextStyle(fontSize: 12, color: Colors.black45)),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.more_horiz),
-                  splashRadius: 18,
-                  onPressed: () => _showPostMenu(post),
-                ),
-              ],
-            ),
-          ),
-
-          // Media area (Instagram-like, 1:1)
-          // If you add a `media_url` column to `posts`, this will render the image.
-          // Otherwise it falls back to a placeholder.
-          GestureDetector(
-            onDoubleTap: () {
-              if (!isLiked) {
-                _togglePostLike(postId);
-              }
-              triggerHeartBurst();
-            },
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                AspectRatio(
-                  aspectRatio: 1,
-                  child: Builder(
-                    builder: (_) {
-                      final mediaUrl = (post['media_url'] ?? '').toString().trim();
-
-                      if (mediaUrl.isEmpty) {
-                        return Container(
-                          color: const Color(0xFFF3F4F6),
-                          child: Center(
-                            child: Icon(
-                              Icons.image_outlined,
-                              size: 64,
-                              color: Colors.black.withOpacity(0.18),
-                            ),
-                          ),
-                        );
-                      }
-
-                      return ClipRRect(
-                        child: Image.network(
-                          mediaUrl,
-                          fit: BoxFit.cover,
-                          width: double.infinity,
-                          height: double.infinity,
-                          loadingBuilder: (context, child, progress) {
-                            if (progress == null) return child;
-                            return Container(
-                              color: const Color(0xFFF3F4F6),
-                              alignment: Alignment.center,
-                              child: const SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              ),
-                            );
-                          },
-                          errorBuilder: (context, error, stack) {
-                            return Container(
-                              color: const Color(0xFFF3F4F6),
-                              alignment: Alignment.center,
-                              child: Icon(
-                                Icons.broken_image_outlined,
-                                size: 56,
-                                color: Colors.black.withOpacity(0.18),
-                              ),
-                            );
-                          },
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                AnimatedOpacity(
-                  opacity: showHeart ? 1 : 0,
-                  duration: const Duration(milliseconds: 120),
-                  child: AnimatedScale(
-                    scale: showHeart ? 1.0 : 0.85,
-                    duration: const Duration(milliseconds: 180),
-                    curve: Curves.easeOutBack,
-                    child: const Icon(
-                      Icons.favorite,
-                      color: Colors.white,
-                      size: 96,
-                      shadows: [
-                        Shadow(color: Colors.black54, blurRadius: 14),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Actions row
-          Padding(
-            padding: const EdgeInsets.fromLTRB(6, 8, 6, 0),
-            child: Row(
-              children: [
-                IconButton(
-                  splashRadius: 20,
-                  onPressed: () {
-                    _togglePostLike(postId);
-                  },
-                  icon: Icon(
-                    isLiked ? Icons.favorite : Icons.favorite_border,
-                    color: isLiked ? Colors.redAccent : Colors.black87,
-                  ),
-                ),
-                IconButton(
-                  splashRadius: 20,
-                  onPressed: () {
-                    showCommentsSheet(
-                      context: context,
-                      postId: postId,
-                      categoryId: widget.categoryId,
-                    );
-                  },
-                  icon: const Icon(Icons.chat_bubble_outline),
-                ),
-                IconButton(
-                  splashRadius: 20,
-                  onPressed: () {
-                    // Share stub (future)
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Share coming soon')),
-                    );
-                  },
-                  icon: const Icon(Icons.send_outlined),
-                ),
-                const Spacer(),
-                IconButton(
-                  splashRadius: 20,
-                  onPressed: () {
-                    setState(() {
-                      if (isSaved) {
-                        _savedPosts.remove(postId);
-                      } else {
-                        _savedPosts.add(postId);
-                      }
-                    });
-                  },
-                  icon: Icon(isSaved ? Icons.bookmark : Icons.bookmark_border),
-                ),
-              ],
-            ),
-          ),
-
-          // Meta: likes + caption + comments entry
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (likesCount > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2, bottom: 6),
-                    child: Text(
-                      "$likesCount like${likesCount == 1 ? '' : 's'}",
-                      style: const TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                  ),
-
-                // Caption (username + text)
-                if (content.trim().isNotEmpty)
-                  Wrap(
-                    children: [
-                      Text(
-                        "$name ",
-                        style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
-                      Text(
-                        isCaptionExpanded || !needsMore ? content : content.trim().substring(0, 140) + "… ",
-                        style: const TextStyle(fontSize: 14, height: 1.25),
-                      ),
-                      if (needsMore)
-                        InkWell(
-                          onTap: () {
-                            setState(() {
-                              if (isCaptionExpanded) {
-                                _expandedCaptions.remove(postId);
-                              } else {
-                                _expandedCaptions.add(postId);
-                              }
-                            });
-                          },
-                          child: Text(
-                            isCaptionExpanded ? "less" : "more",
-                            style: const TextStyle(color: Colors.black54, fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                    ],
-                  ),
-
-                if (totalComments > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: InkWell(
-                      onTap: () {
-                        showCommentsSheet(
-                          context: context,
-                          postId: postId,
-                          categoryId: widget.categoryId,
-                        );
-                      },
-                      child: Text(
-                        "View all $totalComments comment${totalComments == 1 ? '' : 's'}",
-                        style: const TextStyle(color: Colors.black54, fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _miniCommentRowWithReplies(
-    Map<String, dynamic> c,
-    List<Map<String, dynamic>> repliesNewestFirst,
-    Map<String, int> likeCountByComment,
-    Set<String> likedByMeComment,
-  ) {
-    final commentId = (c['id'] ?? '').toString();
-    final userId = (c['user_id'] ?? '').toString();
-
-    final name = userId.isNotEmpty ? _displayNameForUser(userId) : 'Anon';
-    final color = userId.isNotEmpty ? _displayColorForUser(userId) : Colors.grey;
-    final initials = _initialsFromLabel(name);
-
-    final content = (c['content'] ?? '').toString();
-    final time = _timeAgo(c['created_at']);
-    final edited = _isEdited(c);
-
-    final liked = likedByMeComment.contains(commentId);
-    final likeCount = likeCountByComment[commentId] ?? 0;
-
-    final replyCount = repliesNewestFirst.length;
-    final isRepliesOpen = _expandedRepliesForParent.contains(commentId);
-    final visibleReplies = _visibleRepliesCountByParent[commentId] ?? 3;
-
-    // Replies are already newest-first; show latest N, but in UI we show oldest->newest inside that slice
-    final shownReplies = isRepliesOpen
-        ? repliesNewestFirst.take(visibleReplies).toList().reversed.toList()
-        : <Map<String, dynamic>>[];
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Column(
-        children: [
-          // comment row
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              CircleAvatar(
-                radius: 14,
-                backgroundColor: color,
-                child: Text(
-                  initials,
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 11),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFE9E9EF)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Row(
-                              children: [
-                                Text(name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
-                                if (edited)
-                                  const Padding(
-                                    padding: EdgeInsets.only(left: 6),
-                                    child: Text("Edited", style: TextStyle(fontSize: 10, color: Colors.grey)),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          if (time.isNotEmpty) Text(time, style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                        ],
-                      ),
-                      const SizedBox(height: 2),
-                      Text(content),
-
-                      const SizedBox(height: 8),
-
-                      Row(
-                        children: [
-                          InkWell(
-                            onTap: () => _toggleCommentLike(commentId),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  liked ? Icons.favorite : Icons.favorite_border,
-                                  size: 16,
-                                  color: liked ? Colors.redAccent : Colors.grey,
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  likeCount == 0 ? "Like" : "$likeCount",
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                    color: liked ? Colors.redAccent : Colors.grey.shade700,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 14),
-                          InkWell(
-                            onTap: () {
-                              // Keep feed simple: Reply goes to full thread
-                              showCommentsSheet(
-                                context: context,
-                                postId: (c['post_id'] ?? '').toString(),
-                                categoryId: widget.categoryId,
-                              );
-                            },
-                            child: const Text(
-                              "Reply",
-                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.grey),
-                            ),
-                          ),
-                          const SizedBox(width: 14),
-                          if (replyCount > 0)
-                            InkWell(
-                              onTap: () => _toggleRepliesForParent(commentId),
-                              child: Text(
-                                isRepliesOpen ? "Hide replies" : "View replies ($replyCount)",
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.grey),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-
-          // Replies preview
-          if (isRepliesOpen && replyCount > 0)
-            Padding(
-              padding: const EdgeInsets.only(left: 34, top: 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final r in shownReplies) _miniReplyRow(r, likeCountByComment, likedByMeComment),
-
-                  if (visibleReplies < replyCount)
-                    TextButton(
-                      onPressed: () => _loadMoreReplies(commentId),
-                      child: const Text("Load more replies (+3)"),
-                    ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _miniReplyRow(
-    Map<String, dynamic> r,
-    Map<String, int> likeCountByComment,
-    Set<String> likedByMeComment,
-  ) {
-    final commentId = (r['id'] ?? '').toString();
-    final userId = (r['user_id'] ?? '').toString();
-
-    final name = userId.isNotEmpty ? _displayNameForUser(userId) : 'Anon';
-    final color = userId.isNotEmpty ? _displayColorForUser(userId) : Colors.grey;
-    final initials = _initialsFromLabel(name);
-
-    final content = (r['content'] ?? '').toString();
-    final time = _timeAgo(r['created_at']);
-
-    final liked = likedByMeComment.contains(commentId);
-    final likeCount = likeCountByComment[commentId] ?? 0;
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          CircleAvatar(
-            radius: 12,
-            backgroundColor: color,
-            child: Text(
-              initials,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 10),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFE9E9EF)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
-                      ),
-                      if (time.isNotEmpty) Text(time, style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Text(content),
-                  const SizedBox(height: 8),
-                  InkWell(
-                    onTap: () => _toggleCommentLike(commentId),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          liked ? Icons.favorite : Icons.favorite_border,
-                          size: 15,
-                          color: liked ? Colors.redAccent : Colors.grey,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          likeCount == 0 ? "Like" : "$likeCount",
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: liked ? Colors.redAccent : Colors.grey.shade700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SideItem {
-  final IconData icon;
-  final String label;
-  _SideItem({required this.icon, required this.label});
 }
