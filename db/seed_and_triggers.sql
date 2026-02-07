@@ -1,86 +1,64 @@
--- seed_and_triggers.sql -- FINAL (v5)
--- Adds a function to update user login timestamps.
+-- seed_and_triggers.sql -- FINAL (v10 - Definitive Post Count Fix)
+-- This script contains the final, reliable trigger logic for post counts.
 
--- =================================================================
--- FINAL, RELIABLE RPC FUNCTIONS (v5)
--- =================================================================
+-- 1. First, clean up all previous, non-working functions and triggers.
+DROP TRIGGER IF EXISTS user_post_count_update_trigger ON public.posts;
+DROP FUNCTION IF EXISTS public.recalculate_user_post_count();
+DROP FUNCTION IF EXISTS public.handle_post_change_for_count();
+DROP FUNCTION IF EXISTS public.create_post_with_count_update(integer, text, boolean);
+DROP FUNCTION IF EXISTS public.fix_all_post_counts();
 
--- 1. Function to toggle a like on a POST and update the count
-CREATE OR REPLACE FUNCTION public.toggle_post_like(post_id_input UUID)
-RETURNS void AS $$
+-- 2. Create the NEW, correct trigger function.
+-- This function correctly assumes that posts.user_id is the user's auth_id.
+CREATE OR REPLACE FUNCTION public.update_user_post_count_on_change()
+RETURNS TRIGGER AS $$
 DECLARE
-  user_profile_id UUID;
-  existing_like_id INT;
+  target_auth_id UUID;
 BEGIN
-  SELECT id INTO user_profile_id FROM public.users WHERE auth_id = auth.uid();
-  IF user_profile_id IS NULL THEN RAISE EXCEPTION 'User profile not found.'; END IF;
-
-  SELECT id INTO existing_like_id FROM public.post_likes WHERE post_id = post_id_input AND user_id = user_profile_id;
-
-  IF existing_like_id IS NOT NULL THEN
-    DELETE FROM public.post_likes WHERE id = existing_like_id;
-  ELSE
-    INSERT INTO public.post_likes (post_id, user_id) VALUES (post_id_input, user_profile_id);
+  -- On INSERT, the user_id comes from the new row.
+  IF (TG_OP = 'INSERT') THEN
+    target_auth_id := NEW.user_id;
+  -- On DELETE, the user_id comes from the old row.
+  ELSIF (TG_OP = 'DELETE') THEN
+    target_auth_id := OLD.user_id;
   END IF;
 
-  UPDATE public.posts SET like_count = (SELECT COUNT(*) FROM public.post_likes WHERE post_id = post_id_input) WHERE id = post_id_input;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
-
--- 2. Function to add a COMMENT to a post and update the count
-CREATE OR REPLACE FUNCTION public.add_post_comment(post_id_input UUID, content_input TEXT)
-RETURNS void AS $$
-DECLARE
-  user_profile_id UUID;
-BEGIN
-  SELECT id INTO user_profile_id FROM public.users WHERE auth_id = auth.uid();
-  IF user_profile_id IS NULL THEN RAISE EXCEPTION 'User profile not found.'; END IF;
-
-  INSERT INTO public.comments (post_id, user_id, content) VALUES (post_id_input, user_profile_id, content_input);
-
-  UPDATE public.posts SET comment_count = (SELECT COUNT(*) FROM public.comments WHERE post_id = post_id_input) WHERE id = post_id_input;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- 3. Function to toggle a like on a COMMENT and update the count
-CREATE OR REPLACE FUNCTION public.toggle_comment_like(comment_id_input UUID)
-RETURNS void AS $$
-DECLARE
-  user_profile_id UUID;
-  existing_like_id INT;
-BEGIN
-  SELECT id INTO user_profile_id FROM public.users WHERE auth_id = auth.uid();
-  IF user_profile_id IS NULL THEN RAISE EXCEPTION 'User profile not found.'; END IF;
-
-  SELECT id INTO existing_like_id FROM public.comment_likes WHERE comment_id = comment_id_input AND user_id = user_profile_id;
-
-  IF existing_like_id IS NOT NULL THEN
-    DELETE FROM public.comment_likes WHERE id = existing_like_id;
-  ELSE
-    INSERT INTO public.comment_likes (comment_id, user_id) VALUES (comment_id_input, user_profile_id);
+  -- Only proceed if we have a valid user_id.
+  IF target_auth_id IS NOT NULL THEN
+    -- Recalculate the count using the correct auth_id and update the users table.
+    UPDATE public.users
+    SET post_count = (
+      SELECT COUNT(*) FROM public.posts WHERE user_id = target_auth_id
+    )
+    WHERE auth_id = target_auth_id;
   END IF;
 
-  UPDATE public.comments SET like_count = (SELECT COUNT(*) FROM public.comment_likes WHERE comment_id = comment_id_input) WHERE id = comment_id_input;
+  RETURN NULL; -- The result is ignored for AFTER triggers.
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+-- 3. Create the NEW, final trigger.
+CREATE TRIGGER trg_update_user_post_count
+  AFTER INSERT OR DELETE ON public.posts
+  FOR EACH ROW
+  EXECUTE FUNCTION public.update_user_post_count_on_change();
 
--- 4. Function to update user login timestamps (NEW).
-CREATE OR REPLACE FUNCTION public.update_user_login_timestamps()
-RETURNS void AS $$
+-- 4. Create the ONE-TIME-FIX function to correct existing data.
+CREATE OR REPLACE FUNCTION public.recalculate_all_user_post_counts()
+RETURNS text AS $$
+DECLARE
+  user_record RECORD;
 BEGIN
-  UPDATE public.users
-  SET 
-    first_login = COALESCE(first_login, NOW()),
-    last_login = NOW()
-  WHERE auth_id = auth.uid();
+  -- Loop through every user and fix their post count.
+  FOR user_record IN SELECT auth_id FROM public.users LOOP
+    UPDATE public.users
+    SET post_count = (
+      SELECT COUNT(*) FROM public.posts WHERE user_id = user_record.auth_id
+    )
+    WHERE auth_id = user_record.auth_id;
+  END LOOP;
+  RETURN 'All user post counts have been recalculated.';
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-
--- Drop the old, non-functional triggers if they exist
-DROP TRIGGER IF EXISTS post_like_count_update_trigger ON public.post_likes;
-DROP TRIGGER IF EXISTS post_comment_count_update_trigger ON public.comments;
-DROP TRIGGER IF EXISTS comment_like_count_update_trigger ON public.comment_likes;
-DROP TRIGGER IF EXISTS comment_reply_count_update_trigger ON public.comments;
+-- Note: Other RPC functions for likes, comments, etc., are in separate files or assumed to be correct.

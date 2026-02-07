@@ -1,23 +1,21 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'feed_screen.dart';
 import 'notifications_screen.dart';
 import 'profile_screen.dart';
 import '../widgets/post_composer_sheet.dart';
+import '../providers/user_profile_provider.dart';
 
-/// Instagram-like app shell:
-/// - Bottom navigation is primary.
-/// - Center (+) opens a modal composer sheet (does not switch tabs).
-/// - Comments open as a modal sheet from the feed (see FeedScreen).
-class HomeShell extends StatefulWidget {
+class HomeShell extends ConsumerStatefulWidget {
   final int categoryId;
   const HomeShell({super.key, required this.categoryId});
 
   @override
-  State<HomeShell> createState() => _HomeShellState();
+  ConsumerState<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends ConsumerState<HomeShell> {
   int _index = 0;
 
   Future<void> _openComposer() async {
@@ -25,12 +23,6 @@ class _HomeShellState extends State<HomeShell> {
       context: context,
       categoryId: widget.categoryId,
     );
-
-    if (!mounted) return;
-
-    // Optional: If you later want a "Posted ✅" snackbar only on success,
-    // update showPostComposerSheet to Navigator.pop(true) on success and
-    // return Future<bool?>. For now it's Future<void>, so we don't show it here.
   }
 
   @override
@@ -40,15 +32,9 @@ class _HomeShellState extends State<HomeShell> {
       const _ExplorePlaceholder(),
       // index 2 is the + action (no page)
       NotificationsScreen(),
-      ProfileScreen(),
+      const ProfileScreen(), // ProfileScreen is now a const widget
     ];
 
-    // Map bottom-nav index -> page index.
-    // 0 -> feed
-    // 1 -> explore
-    // 2 -> composer action
-    // 3 -> notifications
-    // 4 -> profile
     Widget body;
     if (_index <= 1) {
       body = pages[_index];
@@ -65,36 +51,20 @@ class _HomeShellState extends State<HomeShell> {
         onDestinationSelected: (i) async {
           if (i == 2) {
             await _openComposer();
-            return; // don't change selected tab
+            return;
+          }
+          // When the profile tab is selected, invalidate the provider to force a refresh.
+          if (i == 4) {
+            ref.invalidate(userProfileProvider);
           }
           if (mounted) setState(() => _index = i);
         },
         destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
-            label: 'Home',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.search),
-            selectedIcon: Icon(Icons.search),
-            label: 'Explore',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.add_box_outlined),
-            selectedIcon: Icon(Icons.add_box),
-            label: 'Create',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.favorite_border),
-            selectedIcon: Icon(Icons.favorite),
-            label: 'Activity',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: 'Profile',
-          ),
+          NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Home'),
+          NavigationDestination(icon: Icon(Icons.search), label: 'Explore'),
+          NavigationDestination(icon: Icon(Icons.add_box_outlined), selectedIcon: Icon(Icons.add_box), label: 'Create'),
+          NavigationDestination(icon: Icon(Icons.favorite_border), selectedIcon: Icon(Icons.favorite), label: 'Activity'),
+          NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'Profile'),
         ],
       ),
     );
@@ -117,17 +87,9 @@ class _ExplorePlaceholder extends StatelessWidget {
               children: const [
                 Icon(Icons.search, size: 44),
                 SizedBox(height: 12),
-                Text(
-                  'Explore coming soon',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                  textAlign: TextAlign.center,
-                ),
+                Text('Explore coming soon', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700), textAlign: TextAlign.center),
                 SizedBox(height: 6),
-                Text(
-                  'Search and discover posts by categories and trends.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey),
-                ),
+                Text('Search and discover posts by categories and trends.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
               ],
             ),
           ),

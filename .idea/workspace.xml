@@ -5,13 +5,14 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="7c050478-cbd0-477b-8e9c-d5b18c365501" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/flutter_project/linux/flutter/generated_plugin_registrant.cc" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/linux/flutter/generated_plugin_registrant.cc" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/flutter_project/linux/flutter/generated_plugins.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/linux/flutter/generated_plugins.cmake" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/flutter_project/macos/Flutter/GeneratedPluginRegistrant.swift" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/macos/Flutter/GeneratedPluginRegistrant.swift" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/flutter_project/pubspec.lock" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/pubspec.lock" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/flutter_project/pubspec.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/pubspec.yaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/flutter_project/windows/flutter/generated_plugin_registrant.cc" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/windows/flutter/generated_plugin_registrant.cc" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/flutter_project/windows/flutter/generated_plugins.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/windows/flutter/generated_plugins.cmake" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/flutter_project/lib/providers/user_profile_provider.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/seed_and_triggers.sql" beforeDir="false" afterPath="$PROJECT_DIR$/db/seed_and_triggers.sql" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/lib/main.dart" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/lib/main.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/lib/screens/create_post_screen.dart" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/lib/screens/create_post_screen.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/lib/screens/edit_profile_screen.dart" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/lib/screens/edit_profile_screen.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/lib/screens/home_shell.dart" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/lib/screens/home_shell.dart" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/flutter_project/lib/screens/profile_screen.dart" beforeDir="false" afterPath="$PROJECT_DIR$/flutter_project/lib/screens/profile_screen.dart" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -43,7 +44,7 @@
     "cf.first.check.clang-format": "false",
     "cidr.known.project.marker": "true",
     "dart.analysis.tool.window.visible": "false",
-    "git-widget-placeholder": "main",
+    "git-widget-placeholder": "profile-section",
     "ignore.virus.scanning.warn.message": "true",
     "kotlin-language-version-configured": "true",
     "last_opened_file_path": "D:/Downloads/UnnamedProjectV1_minimal",
