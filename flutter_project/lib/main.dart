@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // Import Riverpod
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'auth/auth_gate.dart';
 
@@ -12,7 +13,8 @@ Future<void> main() async {
     anonKey: dotenv.env['SUPABASE_ANON_KEY'] ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd2ZnBrdGpyZXp0dXdveHFpeWRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMxNzAzOTgsImV4cCI6MjA3ODc0NjM5OH0.HUHoLTCzOJTa7YOgQnTHaMsm1XM_qUAE-oyvHqViIqk',
   );
 
-  runApp(const MyApp());
+  // Wrap the entire app in a ProviderScope.
+  runApp(const ProviderScope(child: MyApp()));
 }
 
 class MyApp extends StatelessWidget {
