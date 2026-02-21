@@ -1,5 +1,5 @@
--- anonymous_social — Schema v6 (Final)
--- This file contains the final, clean schema for the database.
+-- anonymous_social — Schema v8 (Final, Corrected)
+-- This file contains the final schema with multi-category support and media columns.
 
 -- 1️⃣ USERS
 CREATE TABLE IF NOT EXISTS public.users (
@@ -37,13 +37,14 @@ CREATE TABLE IF NOT EXISTS public.user_category (
   UNIQUE (user_id, category_id)
 );
 
--- 4️⃣ POSTS
+-- 4️⃣ POSTS (CORRECTED: Added media_url and media_path)
 CREATE TABLE IF NOT EXISTS public.posts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID REFERENCES public.users(id) ON DELETE SET NULL,
-  category_id INT REFERENCES public.categories(id) ON DELETE SET NULL,
   content TEXT NOT NULL,
   anonymous BOOLEAN DEFAULT TRUE,
+  media_url TEXT, -- Added for post images
+  media_path TEXT, -- Added for post images
   like_count INT DEFAULT 0,
   dislike_count INT DEFAULT 0,
   comment_count INT DEFAULT 0,
@@ -51,7 +52,15 @@ CREATE TABLE IF NOT EXISTS public.posts (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
--- 5️⃣ POST LIKES
+-- 5️⃣ POST_CATEGORIES (many-to-many join table)
+CREATE TABLE IF NOT EXISTS public.post_categories (
+  id SERIAL PRIMARY KEY,
+  post_id UUID REFERENCES public.posts(id) ON DELETE CASCADE,
+  category_id INT REFERENCES public.categories(id) ON DELETE CASCADE,
+  UNIQUE (post_id, category_id)
+);
+
+-- 6️⃣ POST LIKES
 CREATE TABLE IF NOT EXISTS public.post_likes (
   id SERIAL PRIMARY KEY,
   post_id UUID REFERENCES public.posts(id) ON DELETE CASCADE,
@@ -59,7 +68,7 @@ CREATE TABLE IF NOT EXISTS public.post_likes (
   UNIQUE (post_id, user_id)
 );
 
--- 6️⃣ POST DISLIKES
+-- 7️⃣ POST DISLIKES
 CREATE TABLE IF NOT EXISTS public.post_dislikes (
   id SERIAL PRIMARY KEY,
   post_id UUID REFERENCES public.posts(id) ON DELETE CASCADE,
@@ -67,7 +76,7 @@ CREATE TABLE IF NOT EXISTS public.post_dislikes (
   UNIQUE (post_id, user_id)
 );
 
--- 7️⃣ COMMENTS
+-- 8️⃣ COMMENTS
 CREATE TABLE IF NOT EXISTS public.comments (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   post_id UUID REFERENCES public.posts(id) ON DELETE CASCADE,
@@ -75,12 +84,12 @@ CREATE TABLE IF NOT EXISTS public.comments (
   parent_comment_id UUID REFERENCES public.comments(id) ON DELETE CASCADE,
   content TEXT NOT NULL,
   like_count INT DEFAULT 0,
-  dislike_count INT DEFAULT 0, -- Added dislike_count
+  dislike_count INT DEFAULT 0,
   reply_count INT DEFAULT 0,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
--- 8️⃣ COMMENT LIKES
+-- 9️⃣ COMMENT LIKES
 CREATE TABLE IF NOT EXISTS public.comment_likes (
   id SERIAL PRIMARY KEY,
   comment_id UUID REFERENCES public.comments(id) ON DELETE CASCADE,
@@ -88,7 +97,7 @@ CREATE TABLE IF NOT EXISTS public.comment_likes (
   UNIQUE (comment_id, user_id)
 );
 
--- 9️⃣ COMMENT DISLIKES (New Table)
+-- 🔟 COMMENT DISLIKES
 CREATE TABLE IF NOT EXISTS public.comment_dislikes (
   id SERIAL PRIMARY KEY,
   comment_id UUID REFERENCES public.comments(id) ON DELETE CASCADE,
