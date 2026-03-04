@@ -2,9 +2,17 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../models.dart';
 import 'notifications_screen.dart';
+import 'campus_onboarding_screen.dart';
+import 'edit_post_screen.dart';
 import '../widgets/comments_sheet.dart';
 import '../widgets/report_dialog.dart';
+import '../services/block_service.dart';
+import '../services/saved_posts_service.dart';
+import '../services/poll_service.dart';
+
+enum FeedSortMode { latest, trending }
 
 class FeedScreen extends StatefulWidget {
   final int categoryId;
@@ -26,12 +34,29 @@ class _FeedScreenState extends State<FeedScreen> {
   final Set<String> _likedPostIds = {};
   final Map<String, int> _postLikeCounts = {};
 
+  // Saved posts
+  final Set<String> _savedPostIds = {};
+
+  // Campus scoping (optional; requires DB columns)
+  // Multi-campus selection supported via user_campuses.
+  final List<String> _campusIds = [];
+  String _campusLabel = 'Public';
+  DateTime _lastCampusLoad = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _loadingCampuses = false;
+
   bool _refreshing = false;
   bool _ensuredMyIdentity = false;
 
   // Identity cache
   final Map<String, Map<String, dynamic>> _identityByUser = {};
   bool _loadingIdentities = false;
+
+  // Student-safety features
+  Set<String> _blockedUserIds = {};
+
+  // UI state
+  FeedSortMode _sortMode = FeedSortMode.latest;
+  String _categoryName = 'All posts';
 
   // Comment pagination/expand state
   final Set<String> _expandedParents = {};
@@ -47,9 +72,53 @@ class _FeedScreenState extends State<FeedScreen> {
       final user = data.session?.user;
       setState(() => _currentUserId = user?.id);
       _fetchInitialLikes();
+      _fetchInitialSaved();
+      _loadMyCampuses();
     });
 
     _fetchInitialLikes();
+    _fetchInitialSaved();
+    _loadMyCampuses();
+
+    _loadBlockedUsers();
+    _loadCategoryName();
+  }
+
+  @override
+  void didUpdateWidget(covariant FeedScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.categoryId != widget.categoryId) {
+      _loadCategoryName();
+    }
+  }
+
+  Future<void> _loadBlockedUsers() async {
+    final ids = await BlockService.getBlockedUserIds();
+    if (!mounted) return;
+    setState(() => _blockedUserIds = ids);
+  }
+
+  Future<void> _loadCategoryName() async {
+    if (widget.categoryId <= 0) {
+      if (!mounted) return;
+      setState(() => _categoryName = 'All posts');
+      return;
+    }
+
+    try {
+      final row = await supabase
+          .from('categories')
+          .select('name')
+          .eq('id', widget.categoryId)
+          .maybeSingle();
+
+      final name = (row?['name'] ?? '').toString().trim();
+      if (!mounted) return;
+      setState(() => _categoryName = name.isEmpty ? 'Category' : name);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _categoryName = 'Category');
+    }
   }
 
   @override
@@ -106,6 +175,223 @@ class _FeedScreenState extends State<FeedScreen> {
       debugPrint('FETCH LIKES ERROR: $e');
       debugPrint('$st');
     }
+  }
+
+  Future<void> _fetchInitialSaved() async {
+    final me = _currentUserId;
+    if (me == null) return;
+
+    final ids = await SavedPostsService.fetchSavedPostIds();
+    if (!mounted) return;
+    setState(() {
+      _savedPostIds
+        ..clear()
+        ..addAll(ids);
+    });
+  }
+
+  Future<void> _toggleSaved(String postId) async {
+    final me = _currentUserId;
+    if (me == null) return;
+
+    final wasSaved = _savedPostIds.contains(postId);
+    setState(() {
+      if (wasSaved) {
+        _savedPostIds.remove(postId);
+      } else {
+        _savedPostIds.add(postId);
+      }
+    });
+
+    try {
+      await SavedPostsService.toggleSaved(postId: postId, shouldSave: !wasSaved);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        if (wasSaved) {
+          _savedPostIds.add(postId);
+        } else {
+          _savedPostIds.remove(postId);
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Save failed: $e')),
+      );
+    }
+  }
+
+  Future<void> _loadMyCampuses() async {
+    final me = _currentUserId;
+    if (me == null) return;
+
+    _loadingCampuses = true;
+    _lastCampusLoad = DateTime.now();
+
+    try {
+      // Multi-campus: user_campuses(auth_id, campus_id) join campuses(name)
+      final rows = await supabase
+          .from('user_campuses')
+          .select('campus_id, campuses(name)')
+          .eq('auth_id', me);
+
+      final ids = <String>[];
+      final names = <String>[];
+      for (final r in (rows as List)) {
+        final m = (r as Map);
+        final cid = (m['campus_id'] ?? '').toString().trim();
+        if (cid.isEmpty) continue;
+        ids.add(cid);
+        final campuses = m['campuses'];
+        if (campuses is Map) {
+          final nm = (campuses['name'] ?? '').toString().trim();
+          if (nm.isNotEmpty) names.add(nm);
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _campusIds
+          ..clear()
+          ..addAll(ids.toSet());
+
+        if (names.isEmpty) {
+          _campusLabel = _campusIds.isEmpty ? 'Public' : 'My campuses';
+        } else if (names.length <= 2) {
+          _campusLabel = names.join(' + ');
+        } else {
+          _campusLabel = '${names.take(2).join(' + ')} +${names.length - 2}';
+        }
+      });
+    } on PostgrestException {
+      // If join table isn't present, fallback to single-campus users.campus_id.
+      try {
+        final row = await supabase
+            .from('users')
+            .select('campus_id, campuses(name)')
+            .eq('auth_id', me)
+            .maybeSingle();
+
+        final campusId = (row?['campus_id'] ?? '').toString().trim();
+        String campusName = '';
+        final campuses = row?['campuses'];
+        if (campuses is Map) {
+          campusName = (campuses['name'] ?? '').toString().trim();
+        }
+
+        if (!mounted) return;
+        setState(() {
+          _campusIds
+            ..clear()
+            ..addAll(campusId.isEmpty ? [] : [campusId]);
+          _campusLabel = campusName.isEmpty
+              ? (_campusIds.isEmpty ? 'Public' : 'Campus')
+              : campusName;
+        });
+      } catch (_) {
+        // ignore
+      }
+    } catch (_) {
+      // ignore
+    }
+    _loadingCampuses = false;
+  }
+
+  Widget _pollSection({required String postId}) {
+    return FutureBuilder<PollBundle?>(
+      future: PollService.getPollForPost(postId: postId),
+      builder: (context, snap) {
+        final poll = snap.data;
+        if (poll == null) return const SizedBox.shrink();
+
+        final totalVotes = poll.options.fold<int>(0, (a, b) => a + b.votes);
+        final my = poll.myOptionId;
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.poll_outlined, size: 18),
+                    const SizedBox(width: 6),
+                    const Text('Poll', style: TextStyle(fontWeight: FontWeight.w900)),
+                    const Spacer(),
+                    Text('$totalVotes votes', style: const TextStyle(color: Colors.black54)),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                ...poll.options.map((o) {
+                  final isMine = my != null && my == o.id;
+                  final pct = totalVotes == 0 ? 0.0 : (o.votes / totalVotes);
+
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: InkWell(
+                      onTap: (_currentUserId == null)
+                          ? null
+                          : () async {
+                              try {
+                                await PollService.vote(pollId: poll.pollId, optionId: o.id);
+                                if (!mounted) return;
+                                setState(() {});
+                              } catch (e) {
+                                if (!mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Vote failed: $e')),
+                                );
+                              }
+                            },
+                      borderRadius: BorderRadius.circular(14),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: isMine ? Colors.black87 : const Color(0xFFE5E7EB),
+                            width: isMine ? 1.2 : 1.0,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(o.text, style: const TextStyle(fontWeight: FontWeight.w800)),
+                                  const SizedBox(height: 6),
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(999),
+                                    child: LinearProgressIndicator(
+                                      value: pct,
+                                      minHeight: 8,
+                                      backgroundColor: const Color(0xFFF3F4F6),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Text('${o.votes}', style: const TextStyle(fontWeight: FontWeight.w900)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   // ✅ FIX: table name is post_likes (not posts_likes)
@@ -289,7 +575,21 @@ class _FeedScreenState extends State<FeedScreen> {
                   title: const Text('Report'),
                   onTap: () => Navigator.pop(ctx, 'report'),
                 ),
+
+                if (!isMine && postUserId.isNotEmpty) ...[
+                  ListTile(
+                    leading: const Icon(Icons.block_outlined),
+                    title: const Text('Block user'),
+                    subtitle: const Text('Hide their posts & comments on this device'),
+                    onTap: () => Navigator.pop(ctx, 'block'),
+                  ),
+                ],
                 if (isMine) ...[
+                  ListTile(
+                    leading: const Icon(Icons.edit_outlined),
+                    title: const Text('Edit'),
+                    onTap: () => Navigator.pop(ctx, 'edit'),
+                  ),
                   ListTile(
                     leading: const Icon(Icons.delete_outline),
                     title: const Text('Delete'),
@@ -305,6 +605,41 @@ class _FeedScreenState extends State<FeedScreen> {
     );
 
     if (action == null) return;
+
+    if (action == 'block') {
+      if (postUserId.isNotEmpty) {
+        await BlockService.blockUser(postUserId);
+        await _loadBlockedUsers();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('User blocked. You won\'t see their posts/comments.')),
+        );
+      }
+      return;
+    }
+
+    if (action == 'edit') {
+      final content = (post['content'] ?? '').toString();
+      final createdAtRaw = post['created_at'];
+      final createdAt = DateTime.tryParse(createdAtRaw?.toString() ?? '') ?? DateTime.now();
+      final mediaUrl = (post['media_url'] ?? '').toString().trim();
+      final likes = _postLikeCounts[postId] ?? 0;
+
+      final postObj = Post(
+        id: postId,
+        content: content,
+        anonymousName: 'Anonymous',
+        impressions: 0,
+        likes: likes,
+        createdAt: createdAt,
+        mediaUrl: mediaUrl.isEmpty ? null : mediaUrl,
+      );
+
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => EditPostScreen(post: postObj)),
+      );
+      return;
+    }
 
     if (action == 'delete') {
       try {
@@ -448,6 +783,8 @@ class _FeedScreenState extends State<FeedScreen> {
     final isLiked = _likedPostIds.contains(postId);
     final likeCount = _postLikeCounts[postId] ?? 0;
 
+    final isSaved = _savedPostIds.contains(postId);
+
     final commentCount = commentCountByPost[postId] ?? 0;
 
     bool expanded = false;
@@ -502,20 +839,25 @@ class _FeedScreenState extends State<FeedScreen> {
                         children: [
                           Row(
                             children: [
-                              Text(name,
-                                  style: const TextStyle(
-                                      fontSize: 14, fontWeight: FontWeight.w800)),
+                              Text(
+                                name,
+                                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+                              ),
                               if (editedAt != null)
                                 const Padding(
                                   padding: EdgeInsets.only(left: 6),
-                                  child: Text("• Edited",
-                                      style: TextStyle(fontSize: 12, color: Colors.black45)),
+                                  child: Text(
+                                    "• Edited",
+                                    style: TextStyle(fontSize: 12, color: Colors.black45),
+                                  ),
                                 ),
                             ],
                           ),
                           if (time.isNotEmpty)
-                            Text(time,
-                                style: const TextStyle(fontSize: 12, color: Colors.black45)),
+                            Text(
+                              time,
+                              style: const TextStyle(fontSize: 12, color: Colors.black45),
+                            ),
                         ],
                       ),
                     ),
@@ -528,73 +870,51 @@ class _FeedScreenState extends State<FeedScreen> {
                 ),
               ),
 
-              Builder(
-                builder: (_) {
-                  final mediaUrl = (post['media_url'] ?? '').toString().trim();
-                  if (mediaUrl.isEmpty) return const SizedBox.shrink();
+              if (likeCount > 0)
+                Padding(
+                  padding: const EdgeInsets.only(left: 12, top: 2),
+                  child: Text('$likeCount likes',
+                      style: const TextStyle(fontWeight: FontWeight.w800)),
+                ),
 
-                  return GestureDetector(
-                    onDoubleTap: () {
-                      if (!isLiked) {
-                        _togglePostLike(postId);
-                      }
-                      triggerHeartBurst();
-                    },
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        AspectRatio(
-                          aspectRatio: 1,
-                          child: Image.network(
-                            mediaUrl,
-                            fit: BoxFit.cover,
-                            width: double.infinity,
-                            height: double.infinity,
-                            loadingBuilder: (context, child, progress) {
-                              if (progress == null) return child;
-                              return Container(
-                                color: const Color(0xFFF3F4F6),
-                                alignment: Alignment.center,
-                                child: const SizedBox(
-                                  width: 22,
-                                  height: 22,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                ),
-                              );
-                            },
-                            errorBuilder: (context, error, stack) {
-                              return Container(
-                                color: const Color(0xFFF3F4F6),
-                                alignment: Alignment.center,
-                                child: Icon(
-                                  Icons.broken_image_outlined,
-                                  size: 56,
-                                  color: Colors.black.withOpacity(0.18),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                        AnimatedOpacity(
-                          opacity: showHeart ? 1 : 0,
-                          duration: const Duration(milliseconds: 120),
-                          child: AnimatedScale(
-                            scale: showHeart ? 1.0 : 0.85,
-                            duration: const Duration(milliseconds: 180),
-                            curve: Curves.easeOutBack,
-                            child: const Icon(
-                              Icons.favorite,
-                              color: Colors.white,
-                              size: 96,
-                              shadows: [Shadow(color: Colors.black54, blurRadius: 14)],
-                            ),
-                          ),
-                        ),
-                      ],
+              if (content.trim().isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: GestureDetector(
+                    onTap: () => setLocal(() => expanded = !expanded),
+                    child: _captionText(
+                      username: name,
+                      caption: content,
+                      expanded: expanded,
+                      onToggle: () => setLocal(() => expanded = !expanded),
                     ),
-                  );
-                },
-              ),
+                  ),
+                ),
+              ],
+
+              // Poll (if this post has one)
+              _pollSection(postId: postId),
+
+              if (commentCount > 0) ...[
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: InkWell(
+                    onTap: () {
+                      showCommentsSheet(
+                        context: context,
+                        postId: postId,
+                        categoryId: widget.categoryId,
+                      );
+                    },
+                    child: Text(
+                      'View all $commentCount comments',
+                      style: const TextStyle(color: Colors.black54, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+              ],
 
               Padding(
                 padding: const EdgeInsets.fromLTRB(6, 8, 6, 0),
@@ -631,61 +951,15 @@ class _FeedScreenState extends State<FeedScreen> {
                     const Spacer(),
                     IconButton(
                       splashRadius: 20,
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Save coming soon')),
-                        );
-                      },
-                      icon: const Icon(Icons.bookmark_border),
+                      onPressed: () => _toggleSaved(postId),
+                      icon: Icon(isSaved ? Icons.bookmark : Icons.bookmark_border),
                     ),
                   ],
                 ),
               ),
 
-              if (likeCount > 0)
-                Padding(
-                  padding: const EdgeInsets.only(left: 12, top: 2),
-                  child: Text('$likeCount likes',
-                      style: const TextStyle(fontWeight: FontWeight.w800)),
-                ),
-
-              if (content.trim().isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: GestureDetector(
-                    onTap: () => setLocal(() => expanded = !expanded),
-                    child: _captionText(
-                      username: name,
-                      caption: content,
-                      expanded: expanded,
-                      onToggle: () => setLocal(() => expanded = !expanded),
-                    ),
-                  ),
-                ),
-              ],
-
-              if (commentCount > 0) ...[
-                const SizedBox(height: 8),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: InkWell(
-                    onTap: () {
-                      showCommentsSheet(
-                        context: context,
-                        postId: postId,
-                        categoryId: widget.categoryId,
-                      );
-                    },
-                    child: Text(
-                      'View all $commentCount comments',
-                      style: const TextStyle(color: Colors.black54, fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                ),
-              ],
-
               const SizedBox(height: 10),
+
             ],
           ),
         );
@@ -695,9 +969,22 @@ class _FeedScreenState extends State<FeedScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Maybe refresh campuses when coming back from "Change campus".
+    if (_currentUserId != null && !_loadingCampuses) {
+      final diff = DateTime.now().difference(_lastCampusLoad);
+      if (diff.inSeconds >= 2) {
+        _loadMyCampuses();
+      }
+    }
     _ensureMyAnonIdentity();
 
     final postsStream = supabase.from('posts').stream(primaryKey: ['id']);
+    final postCategoriesStream = (widget.categoryId <= 0)
+        ? null
+        : supabase
+            .from('post_categories')
+            .stream(primaryKey: ['post_id', 'category_id'])
+            .eq('category_id', widget.categoryId);
     final commentsStream = supabase.from('comments').stream(primaryKey: ['id']);
     final commentLikesStream = supabase.from('comment_likes').stream(primaryKey: ['id']);
 
@@ -712,6 +999,23 @@ class _FeedScreenState extends State<FeedScreen> {
             title: const Text("Anonymous"),
             centerTitle: !isWide,
             actions: [
+              IconButton(
+                tooltip: 'Change campus',
+                icon: const Icon(Icons.school_outlined),
+                onPressed: () async {
+                  final changed = await Navigator.of(context).push<bool>(
+                    MaterialPageRoute(
+                      builder: (_) => const CampusOnboardingScreen(manageMode: true),
+                    ),
+                  );
+
+                  // If user updated selection, refresh cached campus ids and UI.
+                  if (changed == true) {
+                    await _loadMyCampuses();
+                    if (mounted) setState(() {});
+                  }
+                },
+              ),
               IconButton(
                 icon: const Icon(Icons.notifications_none),
                 onPressed: () {
@@ -763,32 +1067,91 @@ class _FeedScreenState extends State<FeedScreen> {
 
                       _loadIdentitiesForUsers(commentUserIds);
 
+                      final catStream = (widget.categoryId <= 0)
+                          ? Stream.value(<Map<String, dynamic>>[])
+                          : (postCategoriesStream ?? Stream.value(<Map<String, dynamic>>[]));
+
                       return StreamBuilder<List<Map<String, dynamic>>>(
-                        stream: postsStream,
-                        builder: (context, postsSnap) {
-                          if (postsSnap.connectionState == ConnectionState.waiting && !postsSnap.hasData) {
-                            return const Center(child: CircularProgressIndicator());
+                        stream: catStream,
+                        builder: (context, catSnap) {
+                          final postIds = <String>{};
+                          if (widget.categoryId > 0) {
+                            for (final row in (catSnap.data ?? const [])) {
+                              final pid = (row['post_id'] ?? '').toString();
+                              if (pid.isNotEmpty) postIds.add(pid);
+                            }
                           }
 
-                          if (postsSnap.hasError) {
-                            return Center(
-                              child: Text(
-                                'Error loading posts:\n${postsSnap.error}',
-                                style: const TextStyle(color: Colors.red),
-                                textAlign: TextAlign.center,
-                              ),
-                            );
-                          }
+                          return StreamBuilder<List<Map<String, dynamic>>>(
+                            stream: postsStream,
+                            builder: (context, postsSnap) {
+                              if (postsSnap.connectionState == ConnectionState.waiting && !postsSnap.hasData) {
+                                return const Center(child: CircularProgressIndicator());
+                              }
 
-                          final posts = (postsSnap.data ?? [])
-                              .where((p) => (p['is_deleted'] == false || p['is_deleted'] == null))
-                              .where((p) {
-                                if (widget.categoryId <= 0) return true;
-                                return p['category_id'] == widget.categoryId;
-                              })
-                              .toList();
+                              if (postsSnap.hasError) {
+                                return Center(
+                                  child: Text(
+                                    'Error loading posts:\n${postsSnap.error}',
+                                    style: const TextStyle(color: Colors.red),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                );
+                              }
 
+                              final posts = (postsSnap.data ?? [])
+                                  .where((p) => (p['is_deleted'] == false || p['is_deleted'] == null))
+                                  .where((p) {
+                                    final uid = (p['user_id'] ?? '').toString();
+                                    if (uid.isEmpty) return true;
+                                    return !_blockedUserIds.contains(uid);
+                                  })
+                                  .where((p) {
+                                    // Campus filtering rules:
+                                    // - Always include public posts (is_public = true)
+                                    // - If user selected campuses, include posts whose campus_id is in the selection
+                                    // - If user selected NO campus, show only public posts
+                                    final isPublic = p['is_public'] == true;
+                                    if (isPublic) return true;
+
+                                    if (_campusIds.isEmpty) return false;
+                                    final postCampus = (p['campus_id'] ?? '').toString().trim();
+                                    if (postCampus.isEmpty) return false;
+                                    return _campusIds.contains(postCampus);
+                                  })
+                                  .where((p) {
+                                    if (widget.categoryId <= 0) return true;
+                                    final id = (p['id'] ?? '').toString();
+                                    return id.isNotEmpty && postIds.contains(id);
+                                  })
+                                  .toList();
+
+                          // Sorting: Latest vs Trending
                           posts.sort((a, b) {
+                            if (_sortMode == FeedSortMode.latest) {
+                              final aT = (a['created_at'] ?? '').toString();
+                              final bT = (b['created_at'] ?? '').toString();
+                              return bT.compareTo(aT);
+                            }
+
+                            double score(Map<String, dynamic> p) {
+                              final pid = (p['id'] ?? '').toString();
+                              final likes = _postLikeCounts[pid] ?? 0;
+                              final comments = commentCountByPost[pid] ?? 0;
+
+                              final createdAt = DateTime.tryParse((p['created_at'] ?? '').toString()) ?? DateTime.now();
+                              final ageHrs = DateTime.now().difference(createdAt.toLocal()).inMinutes / 60.0;
+
+                              // Simple Reddit-like hot score: engagement / time.
+                              final engagement = (likes * 2) + (comments * 3);
+                              final denom = (ageHrs + 2.0);
+                              return engagement / denom;
+                            }
+
+                            final sB = score(b);
+                            final sA = score(a);
+                            final cmp = sB.compareTo(sA);
+                            if (cmp != 0) return cmp;
                             final aT = (a['created_at'] ?? '').toString();
                             final bT = (b['created_at'] ?? '').toString();
                             return bT.compareTo(aT);
@@ -822,26 +1185,98 @@ class _FeedScreenState extends State<FeedScreen> {
                           // Load like cache once per build tick is OK, but avoid loops:
                           // We already do it on init and refresh.
 
-                          return Center(
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 720),
-                              child: ListView.builder(
-                                physics: const AlwaysScrollableScrollPhysics(),
-                                padding: const EdgeInsets.symmetric(vertical: 10),
-                                itemCount: posts.length,
-                                itemBuilder: (context, index) {
-                                  final post = posts[index];
+                              return Center(
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 720),
+                                  child: Column(
+                                    children: [
+                                      // --- Student-friendly header ---
+                                      Padding(
+                                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 2),
+                                        child: Row(
+                                          children: [
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                              decoration: BoxDecoration(
+                                                color: Colors.white,
+                                                borderRadius: BorderRadius.circular(999),
+                                                border: Border.all(color: const Color(0xFFE5E7EB)),
+                                              ),
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  const Icon(Icons.tag, size: 16),
+                                                  const SizedBox(width: 6),
+                                                  Text(
+                                                    _categoryName,
+                                                    style: const TextStyle(fontWeight: FontWeight.w800),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                              decoration: BoxDecoration(
+                                                color: Colors.white,
+                                                borderRadius: BorderRadius.circular(999),
+                                                border: Border.all(color: const Color(0xFFE5E7EB)),
+                                              ),
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  const Icon(Icons.school_outlined, size: 16),
+                                                  const SizedBox(width: 6),
+                                                  Text(
+                                                    _campusLabel,
+                                                    style: const TextStyle(fontWeight: FontWeight.w800),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            const Spacer(),
+                                            SegmentedButton<FeedSortMode>(
+                                              segments: const <ButtonSegment<FeedSortMode>>[
+                                                ButtonSegment(value: FeedSortMode.latest, label: Text('Latest')),
+                                                ButtonSegment(value: FeedSortMode.trending, label: Text('Trending')),
+                                              ],
+                                              selected: <FeedSortMode>{_sortMode},
+                                              onSelectionChanged: (v) {
+                                                if (v.isEmpty) return;
+                                                setState(() => _sortMode = v.first);
+                                              },
+                                              style: const ButtonStyle(
+                                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                                visualDensity: VisualDensity.compact,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Expanded(
+                                        child: ListView.builder(
+                                          physics: const AlwaysScrollableScrollPhysics(),
+                                          padding: const EdgeInsets.only(bottom: 18),
+                                          itemCount: posts.length,
+                                          itemBuilder: (context, index) {
+                                            final post = posts[index];
 
-                                  final uid = (post['user_id'] ?? '').toString();
-                                  if (uid.isNotEmpty) _loadIdentitiesForUsers({uid});
+                                            final uid = (post['user_id'] ?? '').toString();
+                                            if (uid.isNotEmpty) _loadIdentitiesForUsers({uid});
 
-                                  return _postCard(
-                                    post: post,
-                                    commentCountByPost: commentCountByPost,
-                                  );
-                                },
-                              ),
-                            ),
+                                            return _postCard(
+                                              post: post,
+                                              commentCountByPost: commentCountByPost,
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
                           );
                         },
                       );

@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'feed_screen.dart';
-import 'notifications_screen.dart';
+import 'activity_screen.dart';
 import 'profile_screen.dart';
+import 'categories_screen.dart';
 import '../widgets/post_composer_sheet.dart';
 import '../providers/user_profile_provider.dart';
 
@@ -17,22 +18,39 @@ class HomeShell extends ConsumerStatefulWidget {
 
 class _HomeShellState extends ConsumerState<HomeShell> {
   int _index = 0;
+  late int _categoryId;
+
+  @override
+  void initState() {
+    super.initState();
+    _categoryId = widget.categoryId;
+  }
 
   Future<void> _openComposer() async {
     await showPostComposerSheet(
       context: context,
-      categoryId: widget.categoryId,
+      categoryId: _categoryId == 0 ? 1 : _categoryId, // default preselect
     );
+  }
+
+  void _selectCategory(int id) {
+    setState(() {
+      _categoryId = id;
+      _index = 0; // jump back to Home
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
-      FeedScreen(categoryId: widget.categoryId),
-      const _ExplorePlaceholder(),
-      // index 2 is the + action (no page)
-      NotificationsScreen(),
-      const ProfileScreen(), // ProfileScreen is now a const widget
+      FeedScreen(categoryId: _categoryId),
+      CategoriesScreen(
+        selectedCategoryId: _categoryId,
+        onSelectCategory: _selectCategory,
+      ),
+      // index 2 is +
+      const ActivityScreen(),
+      const ProfileScreen(),
     ];
 
     Widget body;
@@ -53,7 +71,6 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             await _openComposer();
             return;
           }
-          // When the profile tab is selected, invalidate the provider to force a refresh.
           if (i == 4) {
             ref.invalidate(userProfileProvider);
           }
@@ -66,34 +83,6 @@ class _HomeShellState extends ConsumerState<HomeShell> {
           NavigationDestination(icon: Icon(Icons.favorite_border), selectedIcon: Icon(Icons.favorite), label: 'Activity'),
           NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'Profile'),
         ],
-      ),
-    );
-  }
-}
-
-class _ExplorePlaceholder extends StatelessWidget {
-  const _ExplorePlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: const [
-                Icon(Icons.search, size: 44),
-                SizedBox(height: 12),
-                Text('Explore coming soon', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700), textAlign: TextAlign.center),
-                SizedBox(height: 6),
-                Text('Search and discover posts by categories and trends.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }

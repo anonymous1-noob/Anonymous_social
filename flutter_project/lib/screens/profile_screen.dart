@@ -3,15 +3,55 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../providers/user_profile_provider.dart';
+import 'campus_onboarding_screen.dart';
 import 'edit_profile_screen.dart';
+import 'login_screen.dart';
+import 'moderator_queue_screen.dart';
+import 'saved_posts_screen.dart';
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
 
+  Future<void> _signOut(BuildContext context, WidgetRef ref) async {
+    final client = Supabase.instance.client;
+
+    try {
+      await client.auth.signOut();
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sign out failed: $e')),
+        );
+      }
+      return;
+    }
+
+    // Make sure we clear any cached providers too.
+    ref.invalidate(userProfileProvider);
+
+    if (!context.mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => LoginScreen()),
+      (route) => false,
+    );
+  }
+
+  Future<void> _manageCampuses(BuildContext context) async {
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const CampusOnboardingScreen(manageMode: true)),
+    );
+
+    if (!context.mounted) return;
+    if (result == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Campus selection updated')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final userProfile = ref.watch(userProfileProvider);
-    final client = Supabase.instance.client;
 
     return Scaffold(
       appBar: AppBar(
@@ -22,9 +62,7 @@ class ProfileScreen extends ConsumerWidget {
           IconButton(
             icon: const Icon(Icons.logout),
             tooltip: 'Sign Out',
-            onPressed: () async {
-              await client.auth.signOut();
-            },
+            onPressed: () => _signOut(context, ref),
           ),
         ],
       ),
@@ -45,7 +83,7 @@ class ProfileScreen extends ConsumerWidget {
               ),
             );
           }
-          
+
           final avatarUrl = profile['avatar_url'];
           final displayName = profile['display_name'] ?? 'No Name';
           final tagline = profile['tagline'];
@@ -57,10 +95,17 @@ class ProfileScreen extends ConsumerWidget {
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 16.0),
               children: [
-                _ProfileHeader(avatarUrl: avatarUrl, displayName: displayName, tagline: tagline, location: location, postCount: postCount),
+                _ProfileHeader(
+                  avatarUrl: avatarUrl,
+                  displayName: displayName,
+                  tagline: tagline,
+                  location: location,
+                  postCount: postCount,
+                ),
                 const Divider(height: 32, indent: 16, endIndent: 16),
                 _ProfileInfo(profile: profile),
                 const SizedBox(height: 24),
+
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16.0),
                   child: SizedBox(
@@ -76,6 +121,61 @@ class ProfileScreen extends ConsumerWidget {
                     ),
                   ),
                 ),
+
+                const SizedBox(height: 12),
+
+                // ✅ Change campus after login
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _manageCampuses(context),
+                      icon: const Icon(Icons.school_outlined),
+                      label: const Text('Change campus'),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 12),
+
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => const SavedPostsScreen()),
+                        );
+                      },
+                      icon: const Icon(Icons.bookmark_border),
+                      label: const Text('Saved posts'),
+                    ),
+                  ),
+                ),
+
+                if ((profile['is_moderator'] == true) || (profile['role']?.toString() == 'moderator')) ...[
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 48,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(builder: (_) => const ModeratorQueueScreen()),
+                          );
+                        },
+                        icon: const Icon(Icons.shield_outlined),
+                        label: const Text('Moderator queue'),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           );
@@ -115,10 +215,15 @@ class _ProfileHeader extends StatelessWidget {
           radius: 50,
           backgroundColor: colorScheme.surfaceVariant,
           backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl!) : null,
-          child: avatarUrl == null ? Icon(Icons.person, size: 50, color: colorScheme.onSurfaceVariant) : null,
+          child: avatarUrl == null
+              ? Icon(Icons.person, size: 50, color: colorScheme.onSurfaceVariant)
+              : null,
         ),
         const SizedBox(height: 16),
-        Text(displayName, style: textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
+        Text(
+          displayName,
+          style: textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
+        ),
         if (tagline != null && tagline!.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 4.0),
@@ -141,7 +246,7 @@ class _ProfileHeader extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
             _StatColumn(label: 'Posts', value: postCount.toString()),
-            _StatColumn(label: 'Followers', value: '0'), 
+            _StatColumn(label: 'Followers', value: '0'),
             _StatColumn(label: 'Following', value: '0'),
           ],
         ),
@@ -183,7 +288,10 @@ class _ProfileInfo extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Contact Information', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+          Text(
+            'Contact Information',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+          ),
           const SizedBox(height: 8),
           _InfoRow(icon: Icons.email_outlined, label: 'Email', value: email),
           const Divider(),
@@ -208,11 +316,11 @@ class _InfoRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 12.0),
       child: Row(
         children: [
-          Icon(icon, color: Colors.grey[700]),
+          Icon(icon, color: Colors.grey),
           const SizedBox(width: 16),
           Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
           const Spacer(),
-          Text(value, style: TextStyle(color: Colors.grey[800])),
+          Text(value, style: const TextStyle(color: Colors.black54)),
         ],
       ),
     );

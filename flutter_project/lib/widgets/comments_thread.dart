@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../widgets/report_dialog.dart';
+import '../services/block_service.dart';
+import '../services/rate_limit_service.dart';
 
 /// Instagram-like comment thread widget designed to be embedded inside a
 /// DraggableScrollableSheet (bottom sheet).
@@ -58,6 +60,8 @@ class _CommentsThreadState extends State<CommentsThread> {
   bool _ensuredMyIdentity = false;
   bool _loadingIdentities = false;
 
+  Set<String> _blockedUserIds = {};
+
   @override
   void initState() {
     super.initState();
@@ -70,6 +74,14 @@ class _CommentsThreadState extends State<CommentsThread> {
         _currentUserId = user?.id;
       });
     });
+
+    _loadBlockedUsers();
+  }
+
+  Future<void> _loadBlockedUsers() async {
+    final ids = await BlockService.getBlockedUserIds();
+    if (!mounted) return;
+    setState(() => _blockedUserIds = ids);
   }
 
   @override
@@ -207,6 +219,17 @@ class _CommentsThreadState extends State<CommentsThread> {
     final me = _currentUserId;
     if (me == null) return;
 
+    final remaining = await RateLimitService.checkCommentCooldown();
+    if (remaining != null) {
+      final ms = remaining.inMilliseconds;
+      final secs = (ms / 1000).ceil();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('One sec 🙂 Try again in ${secs}s.')),
+      );
+      return;
+    }
+
     final text = _commentController.text.trim();
     if (text.isEmpty) return;
 
@@ -220,6 +243,8 @@ class _CommentsThreadState extends State<CommentsThread> {
         'parent_comment_id': null,
         'is_deleted': false,
       });
+
+      await RateLimitService.markCommented();
       _commentController.clear();
       FocusScope.of(context).unfocus();
     } catch (_) {
@@ -232,6 +257,16 @@ class _CommentsThreadState extends State<CommentsThread> {
   Future<void> _postReply() async {
     final me = _currentUserId;
     if (me == null) return;
+
+    final remaining = await RateLimitService.checkCommentCooldown(cooldown: const Duration(seconds: 6));
+    if (remaining != null) {
+      final secs = (remaining.inMilliseconds / 1000).ceil();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Give it a moment 🙂 Reply again in ${secs}s.')),
+      );
+      return;
+    }
 
     final parentId = _replyToCommentId;
     if (parentId == null) return;
@@ -250,6 +285,8 @@ class _CommentsThreadState extends State<CommentsThread> {
         'reply_to_user_id': _replyToUserId,
         'is_deleted': false,
       });
+
+      await RateLimitService.markCommented();
 
       _replyController.clear();
       setState(() {
@@ -580,6 +617,11 @@ class _CommentsThreadState extends State<CommentsThread> {
                       .where((c) =>
                           (c['post_id'] ?? '').toString() == widget.postId &&
                           (c['is_deleted'] == false || c['is_deleted'] == null))
+                      .where((c) {
+                        final uid = (c['user_id'] ?? '').toString();
+                        if (uid.isEmpty) return true;
+                        return !_blockedUserIds.contains(uid);
+                      })
                       .toList();
 
                   final parents = <Map<String, dynamic>>[];
