@@ -378,7 +378,8 @@ class _PostComposerSheetState extends ConsumerState<PostComposerSheet> {
         final pollId = (pollInserted['id'] ?? '').toString();
         if (pollId.isEmpty) throw 'Failed to create poll.';
 
-        final optionRows = optionTexts.map((t) => {'poll_id': pollId, 'text': t}).toList();
+        // CORRECTED: Column name is 'option_text' in schema
+        final optionRows = optionTexts.map((t) => {'poll_id': pollId, 'option_text': t}).toList();
         await _client.from('poll_options').insert(optionRows);
       }
 
