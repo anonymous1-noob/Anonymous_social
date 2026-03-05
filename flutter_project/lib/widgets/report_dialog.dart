@@ -12,6 +12,8 @@ Future<void> showReportDialog({
   final TextEditingController descriptionCtrl = TextEditingController();
   bool submitting = false;
 
+  String? helperText;
+
   await showDialog(
     context: context,
     builder: (_) => StatefulBuilder(
@@ -25,14 +27,43 @@ Future<void> showReportDialog({
                 value: reason,
                 items: const [
                   DropdownMenuItem(value: 'spam', child: Text('Spam')),
-                  DropdownMenuItem(value: 'abuse', child: Text('Abuse')),
+                  DropdownMenuItem(value: 'harassment', child: Text('Harassment / Bullying')),
+                  DropdownMenuItem(value: 'threats', child: Text('Threats / Violence')),
                   DropdownMenuItem(value: 'hate', child: Text('Hate speech')),
+                  DropdownMenuItem(value: 'sexual', child: Text('Sexual content')),
+                  DropdownMenuItem(value: 'self_harm', child: Text('Self-harm / Suicide')),
+                  DropdownMenuItem(value: 'privacy', child: Text('Privacy / Doxxing')),
+                  DropdownMenuItem(value: 'illegal', child: Text('Illegal / Drugs / Weapons')),
                   DropdownMenuItem(value: 'misinformation', child: Text('Misinformation')),
                   DropdownMenuItem(value: 'other', child: Text('Other')),
                 ],
-                onChanged: (v) => setState(() => reason = v!),
+                onChanged: (v) {
+                  if (v == null) return;
+                  setState(() {
+                    reason = v;
+                    helperText = (reason == 'self_harm')
+                        ? 'If someone is in immediate danger, contact local emergency services or a trusted adult/counselor.'
+                        : null;
+                  });
+                },
                 decoration: const InputDecoration(labelText: 'Reason'),
               ),
+              if (helperText != null) ...[
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.10),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.orange.withOpacity(0.35)),
+                  ),
+                  child: Text(
+                    helperText!,
+                    style: const TextStyle(fontSize: 12, height: 1.25),
+                  ),
+                ),
+              ],
               const SizedBox(height: 10),
               TextField(
                 controller: descriptionCtrl,

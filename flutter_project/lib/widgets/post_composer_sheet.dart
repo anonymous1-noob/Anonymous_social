@@ -3,10 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../providers/category_provider.dart';
+import '../services/rate_limit_service.dart';
+
+enum ComposerPostType { text, poll }
 
 Future<void> showPostComposerSheet({
   required BuildContext context,
-  required int categoryId, // Keep this for now as a default
+  required int categoryId, // kept for backward-compat default
 }) {
   return showModalBottomSheet(
     context: context,
@@ -28,55 +31,370 @@ class PostComposerSheet extends ConsumerStatefulWidget {
 class _PostComposerSheetState extends ConsumerState<PostComposerSheet> {
   final _contentController = TextEditingController();
   final _client = Supabase.instance.client;
-  
+
   bool _loading = false;
   String? _error;
-  final List<int> _selectedCategoryIds = [];
   bool _isAnonymous = true;
+
+  // Campus + Category selection (searchable pickers)
+  List<Map<String, dynamic>> _campuses = [];
+  String? _selectedCampusId; // nullable means "no campus"
+  String _selectedCampusName = 'No campus (Public only)';
+
+  int? _selectedCategoryId;
+  String _selectedCategoryName = 'Select category';
+
+  // When enabled, post is visible outside campus (public)
+  bool _isPublicOutsideCampus = false;
+
+  ComposerPostType _postType = ComposerPostType.text;
+  final List<TextEditingController> _pollOptionCtrls = [
+    TextEditingController(),
+    TextEditingController(),
+  ];
 
   @override
   void initState() {
     super.initState();
-    // Pre-select the default category passed from the HomeShell, if provided.
-    if (widget.defaultCategoryId != null) {
-      _selectedCategoryIds.add(widget.defaultCategoryId!);
+    _loadCampuses();
+
+    // Preselect category if coming from a category feed
+    if (widget.defaultCategoryId != null && widget.defaultCategoryId! > 0) {
+      _selectedCategoryId = widget.defaultCategoryId;
+      // Name will be resolved once category provider loads.
     }
+  }
+
+  @override
+  void dispose() {
+    _contentController.dispose();
+    for (final c in _pollOptionCtrls) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _loadCampuses() async {
+    try {
+      final res = await _client.from('campuses').select('id, name').order('name');
+      if (!mounted) return;
+      setState(() => _campuses = (res as List).cast<Map<String, dynamic>>());
+    } catch (_) {
+      // Campus is optional; ignore if schema not present
+    }
+  }
+
+  Future<void> _pickCampus() async {
+    if (_campuses.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Campus list not available yet.')),
+      );
+      return;
+    }
+
+    final picked = await showModalBottomSheet<Map<String, dynamic>?> (
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      isScrollControlled: true,
+      builder: (ctx) {
+        final search = TextEditingController();
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 12,
+              bottom: MediaQuery.of(ctx).viewInsets.bottom + 12,
+            ),
+            child: StatefulBuilder(
+              builder: (ctx, setLocal) {
+                final q = search.text.trim().toLowerCase();
+                final filtered = _campuses.where((c) {
+                  final nm = (c['name'] ?? '').toString().toLowerCase();
+                  return q.isEmpty || nm.contains(q);
+                }).toList();
+
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE5E7EB),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        const Text('Select campus', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, <String, dynamic>{'id': null, 'name': 'No campus'}),
+                          child: const Text('None'),
+                        )
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: search,
+                      onChanged: (_) => setLocal(() {}),
+                      decoration: InputDecoration(
+                        hintText: 'Search campus…',
+                        prefixIcon: const Icon(Icons.search),
+                        filled: true,
+                        fillColor: const Color(0xFFF3F4F6),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: filtered.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (_, i) {
+                          final c = filtered[i];
+                          final id = (c['id'] ?? '').toString();
+                          final name = (c['name'] ?? '').toString();
+                          final isSel = _selectedCampusId != null && _selectedCampusId == id;
+                          return ListTile(
+                            leading: Icon(isSel ? Icons.check_circle : Icons.school_outlined),
+                            title: Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                            onTap: () => Navigator.pop(ctx, <String, dynamic>{'id': id, 'name': name}),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+
+    if (picked == null) return;
+
+    final id = picked['id']?.toString();
+    final name = (picked['name'] ?? '').toString();
+
+    setState(() {
+      _selectedCampusId = (id == null || id.isEmpty) ? null : id;
+      _selectedCampusName = _selectedCampusId == null ? 'No campus (Public only)' : name;
+
+      // If user removed campus, public toggle is effectively true (global)
+      if (_selectedCampusId == null) {
+        _isPublicOutsideCampus = true;
+      }
+    });
+  }
+
+  Future<void> _pickCategory(List<Map<String, dynamic>> categories) async {
+    final picked = await showModalBottomSheet<Map<String, dynamic>?> (
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      isScrollControlled: true,
+      builder: (ctx) {
+        final search = TextEditingController();
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 12,
+              bottom: MediaQuery.of(ctx).viewInsets.bottom + 12,
+            ),
+            child: StatefulBuilder(
+              builder: (ctx, setLocal) {
+                final q = search.text.trim().toLowerCase();
+                final filtered = categories.where((c) {
+                  final nm = (c['name'] ?? '').toString().toLowerCase();
+                  return q.isEmpty || nm.contains(q);
+                }).toList();
+
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE5E7EB),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('Select category', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: search,
+                      onChanged: (_) => setLocal(() {}),
+                      decoration: InputDecoration(
+                        hintText: 'Search category…',
+                        prefixIcon: const Icon(Icons.search),
+                        filled: true,
+                        fillColor: const Color(0xFFF3F4F6),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: filtered.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (_, i) {
+                          final c = filtered[i];
+                          final id = c['id'];
+                          final name = (c['name'] ?? '').toString();
+                          final isSel = _selectedCategoryId != null && _selectedCategoryId == id;
+                          return ListTile(
+                            leading: Icon(isSel ? Icons.check_circle : Icons.tag),
+                            title: Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                            onTap: () => Navigator.pop(ctx, c),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+
+    if (picked == null) return;
+
+    setState(() {
+      _selectedCategoryId = picked['id'] as int?;
+      _selectedCategoryName = (picked['name'] ?? '').toString();
+    });
   }
 
   Future<void> _createPost() async {
     if (!mounted) return;
-    if (_contentController.text.isEmpty) {
+
+    final remaining = await RateLimitService.checkPostCooldown();
+    if (remaining != null) {
+      final secs = remaining.inSeconds + 1;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Slow down 🙂 You can post again in ${secs}s.')),
+      );
+      return;
+    }
+
+    final content = _contentController.text.trim();
+    if (content.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('You can\'t post nothing!')),
       );
       return;
     }
-    if (_selectedCategoryIds.isEmpty) {
-       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select at least one category.')),
+
+    if (_selectedCategoryId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a category.')),
       );
       return;
     }
 
-    setState(() { _loading = true; _error = null; });
+    if (_postType == ComposerPostType.poll) {
+      final optionTexts = _pollOptionCtrls
+          .map((c) => c.text.trim())
+          .where((t) => t.isNotEmpty)
+          .toList();
+      if (optionTexts.length < 2) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please add at least 2 poll options.')),
+        );
+        return;
+      }
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
 
     try {
-      // Use the new RPC function for creating posts with multiple categories.
-      await _client.rpc('create_post_with_categories', params: {
-        'p_content': _contentController.text,
-        'p_anonymous': _isAnonymous,
-        'p_category_ids': _selectedCategoryIds,
-      });
+      final me = _client.auth.currentUser?.id;
+      if (me == null) throw 'You are not logged in.';
 
-      if (mounted) Navigator.of(context).pop();
+      final inserted = await _client
+          .from('posts')
+          .insert({
+            'user_id': me,
+            'content': content,
+            'anonymous': _isAnonymous,
+            'is_deleted': false,
+            if (_selectedCampusId != null) 'campus_id': _selectedCampusId,
+            // if no campus selected, treat it as public/global
+            'is_public': _selectedCampusId == null ? true : _isPublicOutsideCampus,
+          })
+          .select('id')
+          .single();
+
+      final postId = (inserted['id'] ?? '').toString();
+      if (postId.isEmpty) throw 'Failed to create post.';
+
+      await _client.from('post_categories').insert([
+        {'post_id': postId, 'category_id': _selectedCategoryId}
+      ]);
+
+      if (_postType == ComposerPostType.poll) {
+        final optionTexts = _pollOptionCtrls
+            .map((c) => c.text.trim())
+            .where((t) => t.isNotEmpty)
+            .toList();
+
+        final pollInserted = await _client
+            .from('polls')
+            .insert({'post_id': postId, 'question': content})
+            .select('id')
+            .single();
+
+        final pollId = (pollInserted['id'] ?? '').toString();
+        if (pollId.isEmpty) throw 'Failed to create poll.';
+
+        // CORRECTED: Column name is 'option_text' in schema
+        final optionRows = optionTexts.map((t) => {'poll_id': pollId, 'option_text': t}).toList();
+        await _client.from('poll_options').insert(optionRows);
+      }
+
+      await RateLimitService.markPosted();
+
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
     } on PostgrestException catch (e) {
       if (!mounted) return;
-      setState(() { _error = e.message; });
+      setState(() => _error = e.message);
     } catch (e) {
       if (!mounted) return;
-      setState(() { _error = 'An unexpected error occurred: ${e.toString()}'; });
+      setState(() => _error = e.toString());
     } finally {
-      if (mounted) setState(() { _loading = false; });
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -84,116 +402,245 @@ class _PostComposerSheetState extends ConsumerState<PostComposerSheet> {
   Widget build(BuildContext context) {
     final categoriesAsync = ref.watch(categoriesProvider);
 
-    return DraggableScrollableSheet(
-      initialChildSize: 0.72,
-      minChildSize: 0.45,
-      maxChildSize: 0.95,
-      builder: (context, scrollController) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-          ),
-          child: Column(
-            children: [
-              const SizedBox(height: 10),
-              Container(
-                width: 42,
-                height: 5,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE5E7EB),
-                  borderRadius: BorderRadius.circular(999),
-                ),
+    return GestureDetector(
+      onTap: () => FocusScope.of(context).unfocus(),
+      child: Container(
+        color: Colors.transparent,
+        child: DraggableScrollableSheet(
+          initialChildSize: 0.86,
+          minChildSize: 0.5,
+          maxChildSize: 0.95,
+          builder: (context, scrollController) {
+            return Container(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
               ),
-              const SizedBox(height: 10),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Row(
-                  children: [
-                     IconButton(
-                      onPressed: _loading ? null : () => Navigator.of(context).pop(),
-                      icon: const Icon(Icons.close),
-                      splashRadius: 18,
-                    ),
-                    const Spacer(),
-                    const Text('New Post', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-                    const Spacer(),
-                    TextButton(
-                      onPressed: _loading ? null : _createPost,
-                      child: const Text('Share', style: TextStyle(fontWeight: FontWeight.w800)),
-                    ),
-                  ],
+              child: ListView(
+                controller: scrollController,
+                padding: EdgeInsets.only(
+                  left: 16,
+                  right: 16,
+                  top: 12,
+                  bottom: MediaQuery.of(context).viewInsets.bottom + 18,
                 ),
-              ),
-              const Divider(height: 1, color: Color(0xFFE5E7EB)),
-              Expanded(
-                child: ListView(
-                  controller: scrollController,
-                  padding: const EdgeInsets.all(14),
-                  children: [
-                    TextField(
-                      controller: _contentController,
-                      maxLines: null,
-                      minLines: 3,
-                      decoration: InputDecoration(
-                        hintText: 'Write something...',
-                        filled: true,
-                        fillColor: const Color(0xFFF3F4F6),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(16),
-                          borderSide: BorderSide.none,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 44,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE5E7EB),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      const Text('Create post', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: _loading ? null : () => Navigator.of(context).pop(false),
+                      )
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Post type toggle (Text / Poll)
+                  Row(
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Text'),
+                        selected: _postType == ComposerPostType.text,
+                        onSelected: _loading ? null : (_) => setState(() => _postType = ComposerPostType.text),
+                      ),
+                      const SizedBox(width: 8),
+                      ChoiceChip(
+                        label: const Text('Poll'),
+                        selected: _postType == ComposerPostType.poll,
+                        onSelected: _loading ? null : (_) => setState(() => _postType = ComposerPostType.poll),
+                      ),
+                      const Spacer(),
+                      Switch(
+                        value: _isAnonymous,
+                        onChanged: _loading ? null : (v) => setState(() => _isAnonymous = v),
+                      ),
+                      Text(_isAnonymous ? 'Anonymous' : 'Named', style: const TextStyle(fontWeight: FontWeight.w700)),
+                    ],
+                  ),
+
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _contentController,
+                    maxLines: _postType == ComposerPostType.poll ? 2 : 6,
+                    textInputAction: TextInputAction.newline,
+                    decoration: InputDecoration(
+                      hintText: _postType == ComposerPostType.poll
+                          ? 'Ask a question for your poll…'
+                          : 'What\'s happening? (be kind ✨)',
+                      filled: true,
+                      fillColor: const Color(0xFFF3F4F6),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
+
+                  if (_postType == ComposerPostType.poll) ...[
+                    const SizedBox(height: 12),
+                    const Text('Poll options', style: TextStyle(fontWeight: FontWeight.w900)),
+                    const SizedBox(height: 8),
+                    for (int i = 0; i < _pollOptionCtrls.length; i++)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: TextField(
+                          controller: _pollOptionCtrls[i],
+                          decoration: InputDecoration(
+                            hintText: 'Option ${i + 1}',
+                            filled: true,
+                            fillColor: const Color(0xFFF3F4F6),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: BorderSide.none,
+                            ),
+                          ),
                         ),
                       ),
+                    Row(
+                      children: [
+                        TextButton.icon(
+                          onPressed: _loading || _pollOptionCtrls.length >= 6
+                              ? null
+                              : () => setState(() => _pollOptionCtrls.add(TextEditingController())),
+                          icon: const Icon(Icons.add),
+                          label: const Text('Add option'),
+                        ),
+                        const Spacer(),
+                        if (_pollOptionCtrls.length > 2)
+                          TextButton.icon(
+                            onPressed: _loading
+                                ? null
+                                : () {
+                                    setState(() {
+                                      final c = _pollOptionCtrls.removeLast();
+                                      c.dispose();
+                                    });
+                                  },
+                            icon: const Icon(Icons.remove),
+                            label: const Text('Remove'),
+                          ),
+                      ],
                     ),
-                    const SizedBox(height: 20),
-                    Text('Select Categories', style: Theme.of(context).textTheme.titleMedium),
-                    const SizedBox(height: 8),
-                    categoriesAsync.when(
-                      data: (categories) {
-                        return Wrap(
-                          spacing: 8.0,
-                          runSpacing: 4.0,
-                          children: categories.map((category) {
-                            final isSelected = _selectedCategoryIds.contains(category['id']);
-                            return FilterChip(
-                              label: Text(category['name'] as String),
-                              selected: isSelected,
-                              onSelected: (selected) {
-                                setState(() {
-                                  if (selected) {
-                                    _selectedCategoryIds.add(category['id'] as int);
-                                  } else {
-                                    // CORRECTED: Fixed the typo here.
-                                    _selectedCategoryIds.remove(category['id'] as int);
-                                  }
-                                });
-                              },
-                            );
-                          }).toList(),
-                        );
-                      },
-                      loading: () => const Center(child: CircularProgressIndicator()),
-                      error: (err, stack) => const Text('Could not load categories.'),
-                    ),
-                     const SizedBox(height: 12),
-                    SwitchListTile(
-                      title: const Text('Post Anonymously'),
-                      value: _isAnonymous,
-                      onChanged: (value) => setState(() => _isAnonymous = value),
-                      secondary: const Icon(Icons.visibility_off_outlined),
-                    ),
-                    if (_error != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8.0),
-                        child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-                      ),
                   ],
-                ),
+
+                  const SizedBox(height: 12),
+
+                  // Campus selector
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.school_outlined),
+                    title: const Text('Campus', style: TextStyle(fontWeight: FontWeight.w800)),
+                    subtitle: Text(_selectedCampusName),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: _loading ? null : _pickCampus,
+                  ),
+
+                  // Public outside campus
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _selectedCampusId == null ? true : _isPublicOutsideCampus,
+                    onChanged: _loading
+                        ? null
+                        : (v) {
+                            setState(() {
+                              if (_selectedCampusId == null) {
+                                _isPublicOutsideCampus = true;
+                              } else {
+                                _isPublicOutsideCampus = v ?? false;
+                              }
+                            });
+                          },
+                    title: const Text('Allow outside-campus visibility',
+                        style: TextStyle(fontWeight: FontWeight.w800)),
+                    subtitle: Text(
+                      _selectedCampusId == null
+                          ? 'No campus selected → this post will be public.'
+                          : 'If enabled, students from other campuses can see this post.',
+                      style: const TextStyle(color: Colors.black54),
+                    ),
+                    controlAffinity: ListTileControlAffinity.leading,
+                  ),
+
+                  const SizedBox(height: 6),
+
+                  // Category selector
+                  categoriesAsync.when(
+                    data: (cats) {
+                      // Update name if default selected
+                      if (_selectedCategoryId != null && _selectedCategoryName == 'Select category') {
+                        final match = cats.firstWhere(
+                          (c) => c['id'] == _selectedCategoryId,
+                          orElse: () => <String, dynamic>{},
+                        );
+                        final nm = (match['name'] ?? '').toString();
+                        if (nm.isNotEmpty) _selectedCategoryName = nm;
+                      }
+
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.tag),
+                        title: const Text('Category', style: TextStyle(fontWeight: FontWeight.w800)),
+                        subtitle: Text(_selectedCategoryName),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: _loading ? null : () => _pickCategory(cats),
+                      );
+                    },
+                    loading: () => const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: LinearProgressIndicator(minHeight: 2),
+                    ),
+                    error: (e, st) => Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      child: Text('Failed to load categories: $e',
+                          style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                    ),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: FilledButton(
+                      onPressed: _loading ? null : _createPost,
+                      child: const Text('Post', style: TextStyle(fontWeight: FontWeight.w900)),
+                    ),
+                  ),
+
+                  if (_loading)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 14),
+                      child: Center(child: CircularProgressIndicator()),
+                    ),
+
+                  if (_error != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Text(
+                        _error!,
+                        style: TextStyle(color: Theme.of(context).colorScheme.error),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                ],
               ),
-            ],
-          ),
-        );
-      },
+            );
+          },
+        ),
+      ),
     );
   }
 }
