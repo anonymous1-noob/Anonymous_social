@@ -53,7 +53,7 @@ class MyApp extends StatelessWidget {
             fontWeight: FontWeight.w700,
           ),
         ),
-        cardTheme: CardTheme(
+        cardTheme: CardThemeData(
           elevation: 0,
           margin: EdgeInsets.zero,
           color: colorScheme.surface,
