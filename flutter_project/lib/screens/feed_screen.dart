@@ -4,7 +4,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models.dart';
 import 'notifications_screen.dart';
-import 'campus_onboarding_screen.dart';
 import 'edit_post_screen.dart';
 import '../widgets/comments_sheet.dart';
 import '../widgets/report_dialog.dart';
@@ -37,12 +36,6 @@ class _FeedScreenState extends State<FeedScreen> {
   // Saved posts
   final Set<String> _savedPostIds = {};
 
-  // Campus scoping (optional; requires DB columns)
-  // Multi-campus selection supported via user_campuses.
-  final List<String> _campusIds = [];
-  String _campusLabel = 'Public';
-  DateTime _lastCampusLoad = DateTime.fromMillisecondsSinceEpoch(0);
-  bool _loadingCampuses = false;
 
   bool _refreshing = false;
   bool _ensuredMyIdentity = false;
@@ -73,12 +66,10 @@ class _FeedScreenState extends State<FeedScreen> {
       setState(() => _currentUserId = user?.id);
       _fetchInitialLikes();
       _fetchInitialSaved();
-      _loadMyCampuses();
     });
 
     _fetchInitialLikes();
     _fetchInitialSaved();
-    _loadMyCampuses();
 
     _loadBlockedUsers();
     _loadCategoryName();
@@ -218,82 +209,6 @@ class _FeedScreenState extends State<FeedScreen> {
         SnackBar(content: Text('Save failed: $e')),
       );
     }
-  }
-
-  Future<void> _loadMyCampuses() async {
-    final me = _currentUserId;
-    if (me == null) return;
-
-    _loadingCampuses = true;
-    _lastCampusLoad = DateTime.now();
-
-    try {
-      // Multi-campus: user_campuses(auth_id, campus_id) join campuses(name)
-      final rows = await supabase
-          .from('user_campuses')
-          .select('campus_id, campuses(name)')
-          .eq('auth_id', me);
-
-      final ids = <String>[];
-      final names = <String>[];
-      for (final r in (rows as List)) {
-        final m = (r as Map);
-        final cid = (m['campus_id'] ?? '').toString().trim();
-        if (cid.isEmpty) continue;
-        ids.add(cid);
-        final campuses = m['campuses'];
-        if (campuses is Map) {
-          final nm = (campuses['name'] ?? '').toString().trim();
-          if (nm.isNotEmpty) names.add(nm);
-        }
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _campusIds
-          ..clear()
-          ..addAll(ids.toSet());
-
-        if (names.isEmpty) {
-          _campusLabel = _campusIds.isEmpty ? 'Public' : 'My campuses';
-        } else if (names.length <= 2) {
-          _campusLabel = names.join(' + ');
-        } else {
-          _campusLabel = '${names.take(2).join(' + ')} +${names.length - 2}';
-        }
-      });
-    } on PostgrestException {
-      // If join table isn't present, fallback to single-campus users.campus_id.
-      try {
-        final row = await supabase
-            .from('users')
-            .select('campus_id, campuses(name)')
-            .eq('auth_id', me)
-            .maybeSingle();
-
-        final campusId = (row?['campus_id'] ?? '').toString().trim();
-        String campusName = '';
-        final campuses = row?['campuses'];
-        if (campuses is Map) {
-          campusName = (campuses['name'] ?? '').toString().trim();
-        }
-
-        if (!mounted) return;
-        setState(() {
-          _campusIds
-            ..clear()
-            ..addAll(campusId.isEmpty ? [] : [campusId]);
-          _campusLabel = campusName.isEmpty
-              ? (_campusIds.isEmpty ? 'Public' : 'Campus')
-              : campusName;
-        });
-      } catch (_) {
-        // ignore
-      }
-    } catch (_) {
-      // ignore
-    }
-    _loadingCampuses = false;
   }
 
   Widget _pollSection({required String postId}) {
@@ -969,13 +884,6 @@ class _FeedScreenState extends State<FeedScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Maybe refresh campuses when coming back from "Change campus".
-    if (_currentUserId != null && !_loadingCampuses) {
-      final diff = DateTime.now().difference(_lastCampusLoad);
-      if (diff.inSeconds >= 2) {
-        _loadMyCampuses();
-      }
-    }
     _ensureMyAnonIdentity();
 
     final postsStream = supabase.from('posts').stream(primaryKey: ['id']);
@@ -999,23 +907,6 @@ class _FeedScreenState extends State<FeedScreen> {
             title: const Text("Anonymous"),
             centerTitle: !isWide,
             actions: [
-              IconButton(
-                tooltip: 'Change campus',
-                icon: const Icon(Icons.school_outlined),
-                onPressed: () async {
-                  final changed = await Navigator.of(context).push<bool>(
-                    MaterialPageRoute(
-                      builder: (_) => const CampusOnboardingScreen(manageMode: true),
-                    ),
-                  );
-
-                  // If user updated selection, refresh cached campus ids and UI.
-                  if (changed == true) {
-                    await _loadMyCampuses();
-                    if (mounted) setState(() {});
-                  }
-                },
-              ),
               IconButton(
                 icon: const Icon(Icons.notifications_none),
                 onPressed: () {
@@ -1106,19 +997,7 @@ class _FeedScreenState extends State<FeedScreen> {
                                     if (uid.isEmpty) return true;
                                     return !_blockedUserIds.contains(uid);
                                   })
-                                  .where((p) {
-                                    // Campus filtering rules:
-                                    // - Always include public posts (is_public = true)
-                                    // - If user selected campuses, include posts whose campus_id is in the selection
-                                    // - If user selected NO campus, show only public posts
-                                    final isPublic = p['is_public'] == true;
-                                    if (isPublic) return true;
-
-                                    if (_campusIds.isEmpty) return false;
-                                    final postCampus = (p['campus_id'] ?? '').toString().trim();
-                                    if (postCampus.isEmpty) return false;
-                                    return _campusIds.contains(postCampus);
-                                  })
+                                  .where((p) => p['is_public'] == true)
                                   .where((p) {
                                     if (widget.categoryId <= 0) return true;
                                     final id = (p['id'] ?? '').toString();
@@ -1195,45 +1074,7 @@ class _FeedScreenState extends State<FeedScreen> {
                                         padding: const EdgeInsets.fromLTRB(12, 12, 12, 2),
                                         child: Row(
                                           children: [
-                                            Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                              decoration: BoxDecoration(
-                                                color: Colors.white,
-                                                borderRadius: BorderRadius.circular(999),
-                                                border: Border.all(color: const Color(0xFFE5E7EB)),
-                                              ),
-                                              child: Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  const Icon(Icons.tag, size: 16),
-                                                  const SizedBox(width: 6),
-                                                  Text(
-                                                    _categoryName,
-                                                    style: const TextStyle(fontWeight: FontWeight.w800),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
                                             const SizedBox(width: 8),
-                                            Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                              decoration: BoxDecoration(
-                                                color: Colors.white,
-                                                borderRadius: BorderRadius.circular(999),
-                                                border: Border.all(color: const Color(0xFFE5E7EB)),
-                                              ),
-                                              child: Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  const Icon(Icons.school_outlined, size: 16),
-                                                  const SizedBox(width: 6),
-                                                  Text(
-                                                    _campusLabel,
-                                                    style: const TextStyle(fontWeight: FontWeight.w800),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
                                             const Spacer(),
                                             SegmentedButton<FeedSortMode>(
                                               segments: const <ButtonSegment<FeedSortMode>>[

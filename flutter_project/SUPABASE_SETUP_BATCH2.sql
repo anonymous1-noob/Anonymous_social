@@ -3,22 +3,7 @@
 -- Run in Supabase SQL editor.
 -- Adjust types (uuid vs text) depending on your current posts.id type.
 
--- 1) Campus scoping
-create table if not exists public.campuses (
-  id uuid primary key default gen_random_uuid(),
-  name text not null,
-  created_at timestamptz not null default now()
-);
-
--- users table is assumed to exist (your app uses public.users with auth_id)
-alter table public.users
-  add column if not exists campus_id uuid references public.campuses(id);
-
--- posts table is assumed to exist
-alter table public.posts
-  add column if not exists campus_id uuid references public.campuses(id);
-
-create index if not exists idx_posts_campus_id on public.posts(campus_id);
+-- 1) Campus/user_campus support removed
 
 -- 2) Saved posts
 create table if not exists public.saved_posts (

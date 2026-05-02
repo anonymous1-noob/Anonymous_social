@@ -19,12 +19,6 @@ class _EditPostScreenState extends State<EditPostScreen> {
   bool _loading = false;
   String? _error;
 
-  // Campus + category editing
-  List<Map<String, dynamic>> _campuses = [];
-  List<Map<String, dynamic>> _categories = [];
-
-  String? _selectedCampusId;
-  String _selectedCampusName = 'Public';
 
   int? _selectedCategoryId;
   String _selectedCategoryName = 'Select category';
@@ -49,39 +43,10 @@ class _EditPostScreenState extends State<EditPostScreen> {
     });
 
     try {
-      // Load campuses (optional)
-      try {
-        final res = await _client.from('campuses').select('id, name').order('name');
-        _campuses = (res as List).cast<Map<String, dynamic>>();
-      } catch (_) {
-        _campuses = [];
-      }
-
       // Load categories
       final cats = await _client.from('categories').select('id, name').order('name');
       _categories = (cats as List).cast<Map<String, dynamic>>();
 
-      // Load current post campus
-      try {
-        final postRow = await _client
-            .from('posts')
-            .select('campus_id, is_public')
-            .eq('id', widget.post.id)
-            .maybeSingle();
-
-        final campusId = (postRow?['campus_id'] ?? '').toString().trim();
-        _selectedCampusId = campusId.isEmpty ? null : campusId;
-
-        if (_selectedCampusId == null) {
-          _selectedCampusName = 'Public';
-        } else {
-          final match = _campuses.firstWhere(
-            (c) => (c['id'] ?? '').toString() == _selectedCampusId,
-            orElse: () => {},
-          );
-          final nm = (match['name'] ?? '').toString().trim();
-          _selectedCampusName = nm.isEmpty ? 'Campus' : nm;
-        }
       } catch (_) {
         // ignore
       }
@@ -130,32 +95,6 @@ class _EditPostScreenState extends State<EditPostScreen> {
     }
   }
 
-  Future<void> _pickCampus() async {
-    final picked = await _searchPick(
-      context: context,
-      title: 'Select campus',
-      items: _campuses
-          .map((c) => _PickItem(id: (c['id'] ?? '').toString(), label: (c['name'] ?? '').toString()))
-          .where((x) => x.id.isNotEmpty)
-          .toList(),
-      allowNone: true,
-      noneLabel: 'Public (outside campus)',
-    );
-
-    if (!mounted) return;
-
-    if (picked == null) return;
-
-    setState(() {
-      if (picked.id == '__NONE__') {
-        _selectedCampusId = null;
-        _selectedCampusName = 'Public';
-      } else {
-        _selectedCampusId = picked.id;
-        _selectedCampusName = picked.label;
-      }
-    });
-  }
 
   Future<void> _pickCategory() async {
     final picked = await _searchPick(
@@ -191,7 +130,6 @@ class _EditPostScreenState extends State<EditPostScreen> {
       // Update post core fields
       await _client.from('posts').update({
         'content': content,
-        'campus_id': _selectedCampusId, // null = public
         'edited_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', widget.post.id);
 

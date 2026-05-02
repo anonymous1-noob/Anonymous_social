@@ -36,16 +36,6 @@ class _PostComposerSheetState extends ConsumerState<PostComposerSheet> {
   String? _error;
   bool _isAnonymous = true;
 
-  // Campus + Category selection (searchable pickers)
-  List<Map<String, dynamic>> _campuses = [];
-  String? _selectedCampusId; // nullable means "no campus"
-  String _selectedCampusName = 'No campus (Public only)';
-
-  int? _selectedCategoryId;
-  String _selectedCategoryName = 'Select category';
-
-  // When enabled, post is visible outside campus (public)
-  bool _isPublicOutsideCampus = false;
 
   ComposerPostType _postType = ComposerPostType.text;
   final List<TextEditingController> _pollOptionCtrls = [
@@ -56,7 +46,6 @@ class _PostComposerSheetState extends ConsumerState<PostComposerSheet> {
   @override
   void initState() {
     super.initState();
-    _loadCampuses();
 
     // Preselect category if coming from a category feed
     if (widget.defaultCategoryId != null && widget.defaultCategoryId! > 0) {
@@ -74,130 +63,7 @@ class _PostComposerSheetState extends ConsumerState<PostComposerSheet> {
     super.dispose();
   }
 
-  Future<void> _loadCampuses() async {
-    try {
-      final res = await _client.from('campuses').select('id, name').order('name');
-      if (!mounted) return;
-      setState(() => _campuses = (res as List).cast<Map<String, dynamic>>());
-    } catch (_) {
-      // Campus is optional; ignore if schema not present
-    }
-  }
 
-  Future<void> _pickCampus() async {
-    if (_campuses.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Campus list not available yet.')),
-      );
-      return;
-    }
-
-    final picked = await showModalBottomSheet<Map<String, dynamic>?> (
-      context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      isScrollControlled: true,
-      builder: (ctx) {
-        final search = TextEditingController();
-        return SafeArea(
-          top: false,
-          child: Padding(
-            padding: EdgeInsets.only(
-              left: 16,
-              right: 16,
-              top: 12,
-              bottom: MediaQuery.of(ctx).viewInsets.bottom + 12,
-            ),
-            child: StatefulBuilder(
-              builder: (ctx, setLocal) {
-                final q = search.text.trim().toLowerCase();
-                final filtered = _campuses.where((c) {
-                  final nm = (c['name'] ?? '').toString().toLowerCase();
-                  return q.isEmpty || nm.contains(q);
-                }).toList();
-
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 42,
-                      height: 5,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE5E7EB),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        const Text('Select campus', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-                        const Spacer(),
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx, <String, dynamic>{'id': null, 'name': 'No campus'}),
-                          child: const Text('None'),
-                        )
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: search,
-                      onChanged: (_) => setLocal(() {}),
-                      decoration: InputDecoration(
-                        hintText: 'Search campus…',
-                        prefixIcon: const Icon(Icons.search),
-                        filled: true,
-                        fillColor: const Color(0xFFF3F4F6),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(14),
-                          borderSide: BorderSide.none,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Flexible(
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: filtered.length,
-                        separatorBuilder: (_, __) => const Divider(height: 1),
-                        itemBuilder: (_, i) {
-                          final c = filtered[i];
-                          final id = (c['id'] ?? '').toString();
-                          final name = (c['name'] ?? '').toString();
-                          final isSel = _selectedCampusId != null && _selectedCampusId == id;
-                          return ListTile(
-                            leading: Icon(isSel ? Icons.check_circle : Icons.school_outlined),
-                            title: Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                            onTap: () => Navigator.pop(ctx, <String, dynamic>{'id': id, 'name': name}),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-        );
-      },
-    );
-
-    if (picked == null) return;
-
-    final id = picked['id']?.toString();
-    final name = (picked['name'] ?? '').toString();
-
-    setState(() {
-      _selectedCampusId = (id == null || id.isEmpty) ? null : id;
-      _selectedCampusName = _selectedCampusId == null ? 'No campus (Public only)' : name;
-
-      // If user removed campus, public toggle is effectively true (global)
-      if (_selectedCampusId == null) {
-        _isPublicOutsideCampus = true;
-      }
-    });
-  }
 
   Future<void> _pickCategory(List<Map<String, dynamic>> categories) async {
     final picked = await showModalBottomSheet<Map<String, dynamic>?> (
@@ -349,9 +215,7 @@ class _PostComposerSheetState extends ConsumerState<PostComposerSheet> {
             'content': content,
             'anonymous': _isAnonymous,
             'is_deleted': false,
-            if (_selectedCampusId != null) 'campus_id': _selectedCampusId,
-            // if no campus selected, treat it as public/global
-            'is_public': _selectedCampusId == null ? true : _isPublicOutsideCampus,
+            'is_public': true,
           })
           .select('id')
           .single();
@@ -537,42 +401,6 @@ class _PostComposerSheetState extends ConsumerState<PostComposerSheet> {
                   ],
 
                   const SizedBox(height: 12),
-
-                  // Campus selector
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.school_outlined),
-                    title: const Text('Campus', style: TextStyle(fontWeight: FontWeight.w800)),
-                    subtitle: Text(_selectedCampusName),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: _loading ? null : _pickCampus,
-                  ),
-
-                  // Public outside campus
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: _selectedCampusId == null ? true : _isPublicOutsideCampus,
-                    onChanged: _loading
-                        ? null
-                        : (v) {
-                            setState(() {
-                              if (_selectedCampusId == null) {
-                                _isPublicOutsideCampus = true;
-                              } else {
-                                _isPublicOutsideCampus = v ?? false;
-                              }
-                            });
-                          },
-                    title: const Text('Allow outside-campus visibility',
-                        style: TextStyle(fontWeight: FontWeight.w800)),
-                    subtitle: Text(
-                      _selectedCampusId == null
-                          ? 'No campus selected → this post will be public.'
-                          : 'If enabled, students from other campuses can see this post.',
-                      style: const TextStyle(color: Colors.black54),
-                    ),
-                    controlAffinity: ListTileControlAffinity.leading,
-                  ),
 
                   const SizedBox(height: 6),
 
