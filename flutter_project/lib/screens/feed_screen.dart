@@ -857,7 +857,7 @@ class _FeedScreenState extends State<FeedScreen> {
                     ),
                     IconButton(
                       splashRadius: 20,
-                      onPressed: () => _sharePost(authorName: name, content: content),
+                      onPressed: () => _sharePost(postId: postId),
                       icon: const Icon(Icons.send_outlined),
                     ),
                     const Spacer(),
@@ -880,10 +880,9 @@ class _FeedScreenState extends State<FeedScreen> {
   }
 
 
-  Future<void> _sharePost({required String authorName, required String content}) async {
-    final body = content.trim().isEmpty ? 'Check out this post on Anonymous Social.' : content.trim();
-    final text = 'Post by $authorName\n\n$body';
-    await Share.share(text);
+  Future<void> _sharePost({required String postId}) async {
+    final link = 'https://anonymous-social.app/post/$postId';
+    await Share.share(link);
   }
 
   @override
