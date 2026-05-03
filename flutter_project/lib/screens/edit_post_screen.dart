@@ -19,7 +19,7 @@ class _EditPostScreenState extends State<EditPostScreen> {
   bool _loading = false;
   String? _error;
 
-
+  final List<Map<String, dynamic>> _categories = [];
   int? _selectedCategoryId;
   String _selectedCategoryName = 'Select category';
 
@@ -43,15 +43,11 @@ class _EditPostScreenState extends State<EditPostScreen> {
     });
 
     try {
-      // Load categories
       final cats = await _client.from('categories').select('id, name').order('name');
-      _categories = (cats as List).cast<Map<String, dynamic>>();
+      _categories
+        ..clear()
+        ..addAll((cats as List).cast<Map<String, dynamic>>());
 
-      } catch (_) {
-        // ignore
-      }
-
-      // Load current post category (take the first mapping if multiple)
       try {
         final rows = await _client
             .from('post_categories')
@@ -82,7 +78,7 @@ class _EditPostScreenState extends State<EditPostScreen> {
           }
         }
       } catch (_) {
-        // ignore
+        // ignore per-post category lookup failures
       }
     } on PostgrestException catch (e) {
       _error = e.message;
@@ -94,7 +90,6 @@ class _EditPostScreenState extends State<EditPostScreen> {
       }
     }
   }
-
 
   Future<void> _pickCategory() async {
     final picked = await _searchPick(
@@ -189,15 +184,6 @@ class _EditPostScreenState extends State<EditPostScreen> {
                 // Campus + category controls
                 Row(
                   children: [
-                    Expanded(
-                      child: _PickerButton(
-                        label: 'Campus',
-                        value: _selectedCampusName,
-                        icon: Icons.school_outlined,
-                        onTap: _loading ? null : _pickCampus,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
                     Expanded(
                       child: _PickerButton(
                         label: 'Category',

@@ -36,6 +36,8 @@ class _PostComposerSheetState extends ConsumerState<PostComposerSheet> {
   String? _error;
   bool _isAnonymous = true;
 
+  int? _selectedCategoryId;
+  String _selectedCategoryName = 'Select category';
 
   ComposerPostType _postType = ComposerPostType.text;
   final List<TextEditingController> _pollOptionCtrls = [
