@@ -22,9 +22,6 @@ CREATE TABLE IF NOT EXISTS public.categories (
   type TEXT NOT NULL CHECK (type IN ('company', 'college', 'region')),
   name TEXT NOT NULL,
   description TEXT,
-  city TEXT,
-  state TEXT,
-  country TEXT,
   created_by UUID REFERENCES public.users(id) ON DELETE SET NULL,
   created_at TIMESTAMP DEFAULT NOW()
 );
