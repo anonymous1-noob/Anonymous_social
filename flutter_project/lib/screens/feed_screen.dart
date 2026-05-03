@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../models.dart';
 import 'notifications_screen.dart';
@@ -856,11 +857,7 @@ class _FeedScreenState extends State<FeedScreen> {
                     ),
                     IconButton(
                       splashRadius: 20,
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Share coming soon')),
-                        );
-                      },
+                      onPressed: () => _sharePost(postId: postId),
                       icon: const Icon(Icons.send_outlined),
                     ),
                     const Spacer(),
@@ -880,6 +877,12 @@ class _FeedScreenState extends State<FeedScreen> {
         );
       },
     );
+  }
+
+
+  Future<void> _sharePost({required String postId}) async {
+    final link = 'https://anonymous-social.app/post/$postId';
+    await Share.share(link);
   }
 
   @override
