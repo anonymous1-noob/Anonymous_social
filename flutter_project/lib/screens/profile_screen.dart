@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../providers/user_profile_provider.dart';
-import 'campus_onboarding_screen.dart';
 import 'edit_profile_screen.dart';
 import 'login_screen.dart';
 import 'moderator_queue_screen.dart';
@@ -34,19 +33,6 @@ class ProfileScreen extends ConsumerWidget {
       MaterialPageRoute(builder: (_) => LoginScreen()),
       (route) => false,
     );
-  }
-
-  Future<void> _manageCampuses(BuildContext context) async {
-    final result = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const CampusOnboardingScreen(manageMode: true)),
-    );
-
-    if (!context.mounted) return;
-    if (result == true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Campus selection updated')),
-      );
-    }
   }
 
   @override
@@ -123,20 +109,6 @@ class ProfileScreen extends ConsumerWidget {
                 ),
 
                 const SizedBox(height: 12),
-
-                // ✅ Change campus after login
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                  child: SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: OutlinedButton.icon(
-                      onPressed: () => _manageCampuses(context),
-                      icon: const Icon(Icons.school_outlined),
-                      label: const Text('Change campus'),
-                    ),
-                  ),
-                ),
 
                 const SizedBox(height: 12),
 
