@@ -11,7 +11,7 @@ import '../services/block_service.dart';
 import '../services/saved_posts_service.dart';
 import '../services/poll_service.dart';
 
-enum FeedSortMode { latest, trending }
+enum FeedSortMode { latest, trending, edgerank }
 
 class FeedScreen extends StatefulWidget {
   final int categoryId;
@@ -32,6 +32,7 @@ class _FeedScreenState extends State<FeedScreen> {
   // Like cache for posts (optimistic feel)
   final Set<String> _likedPostIds = {};
   final Map<String, int> _postLikeCounts = {};
+  final Map<String, int> commentCountByPost = {};
 
   // Saved posts
   final Set<String> _savedPostIds = {};
@@ -167,6 +168,34 @@ class _FeedScreenState extends State<FeedScreen> {
       debugPrint('$st');
     }
   }
+
+  double _edgeRankScore(Map<String, dynamic> p) {
+  final pid = (p['id'] ?? '').toString();
+
+  final likes = _postLikeCounts[pid] ?? 0;
+
+  // ✅ FIXED COMMENTS (no extra map needed)
+  final comments =
+      (p['comments'] != null && p['comments'].isNotEmpty)
+          ? p['comments'][0]['count'] ?? 0
+          : 0;
+
+  final createdAt = DateTime.tryParse((p['created_at'] ?? '').toString()) ?? DateTime.now();
+  final hours = DateTime.now().difference(createdAt.toLocal()).inHours;
+
+  final decay = 1 / (1 + (hours / 12));
+
+  final weight = (likes * 1.0) + (comments * 2.0);
+
+  double affinity = 1.0;
+  if (_currentUserId != null && p['user_id'] == _currentUserId) {
+    affinity = 2.0;
+  }
+
+  final random = (DateTime.now().millisecondsSinceEpoch % 1000) / 1000;
+
+  return (affinity * (1 + weight) * decay) + (random * 0.1);
+}
 
   Future<void> _fetchInitialSaved() async {
     final me = _currentUserId;
@@ -1012,6 +1041,11 @@ class _FeedScreenState extends State<FeedScreen> {
                               final bT = (b['created_at'] ?? '').toString();
                               return bT.compareTo(aT);
                             }
+                            if (_sortMode == FeedSortMode.edgerank) {
+                              final sB = _edgeRankScore(b);
+                              final sA = _edgeRankScore(a);
+                              return sB.compareTo(sA);
+                            }
 
                             double score(Map<String, dynamic> p) {
                               final pid = (p['id'] ?? '').toString();
@@ -1080,6 +1114,7 @@ class _FeedScreenState extends State<FeedScreen> {
                                               segments: const <ButtonSegment<FeedSortMode>>[
                                                 ButtonSegment(value: FeedSortMode.latest, label: Text('Latest')),
                                                 ButtonSegment(value: FeedSortMode.trending, label: Text('Trending')),
+                                                ButtonSegment(value: FeedSortMode.edgerank, label: Text('For You')), // 🔥 ADD THIS
                                               ],
                                               selected: <FeedSortMode>{_sortMode},
                                               onSelectionChanged: (v) {
