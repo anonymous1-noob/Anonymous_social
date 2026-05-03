@@ -1,35 +1,59 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:supabase_flutter/supabase_flutter.dart'; 
 
-import 'user_profile_provider.dart';
+/// 🔥 EdgeRank function (REUSABLE)
+List<Map<String, dynamic>> applyEdgeRank({
+  required List<Map<String, dynamic>> posts,
+  String? currentUserId,
+}) {
+  final now = DateTime.now();
 
-/// A provider that fetches the feed for a given category using a simple, robust query.
-final feedProvider = FutureProvider.family<List<Map<String, dynamic>>, int>((ref, int categoryId) async {
-  final supabaseClient = ref.watch(supabaseClientProvider);
+  final scoredPosts = posts.map<Map<String, dynamic>>((post) {
+    final createdAt =
+        DateTime.tryParse(post['created_at'] ?? '') ?? now;
 
-  try {
-    final postCategoryResponse = await supabaseClient
-        .from('post_categories')
-        .select('post_id')
-        .eq('category_id', categoryId);
+    // TIME DECAY
+    final hoursSincePost = now.difference(createdAt).inHours;
+    final timeDecay = 1 / (1 + (hoursSincePost / 12));
 
-    final postIds = postCategoryResponse.map((row) => row['post_id'] as String).toList();
+    // ENGAGEMENT
+    final likeCount =
+        (post['likes'] != null && post['likes'].isNotEmpty)
+            ? post['likes'][0]['count'] ?? 0
+            : 0;
 
-    if (postIds.isEmpty) {
-      return [];
+    final commentCount =
+        (post['comments'] != null && post['comments'].isNotEmpty)
+            ? post['comments'][0]['count'] ?? 0
+            : 0;
+
+    final weight = (likeCount * 1.0) + (commentCount * 2.0);
+
+    // AFFINITY
+    double affinity = 1.0;
+
+    if (currentUserId != null &&
+        post['user_id'] == currentUserId) {
+      affinity = 2.0;
     }
 
-    // CORRECTED: The query now also fetches the author's display_name.
-    final postsResponse = await supabaseClient
-        .from('posts')
-        .select('*, users(display_name)') // Join with users table
-        .in_('id', postIds)
-        .order('created_at', ascending: false);
+    // RANDOM BOOST (important for refresh feel)
+    final randomBoost =
+        (DateTime.now().millisecondsSinceEpoch % 1000) / 1000;
 
-    return postsResponse;
+    final score =
+        (affinity * (1 + weight) * timeDecay) + (randomBoost * 0.1);
 
-  } catch (e) {
-    print('Error fetching feed: $e');
-    return [];
-  }
-});
+    return {
+      ...post,
+      'edge_rank_score': score,
+    };
+  }).toList();
+
+  scoredPosts.sort((a, b) =>
+      (b['edge_rank_score'] as double)
+          .compareTo(a['edge_rank_score'] as double));
+
+  print("🔥 EdgeRank applied on ${posts.length} posts");
+
+  return scoredPosts;
+}
