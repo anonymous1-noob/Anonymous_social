@@ -883,7 +883,7 @@ class _FeedScreenState extends State<FeedScreen> {
   Future<void> _sharePost({required String authorName, required String content}) async {
     final body = content.trim().isEmpty ? 'Check out this post on Anonymous Social.' : content.trim();
     final text = 'Post by $authorName\n\n$body';
-    await SharePlus.instance.share(ShareParams(text: text));
+    await Share.share(text);
   }
 
   @override
