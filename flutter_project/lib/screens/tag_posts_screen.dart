@@ -74,7 +74,6 @@ class _TagPostsScreenState extends State<TagPostsScreen> {
                 margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: ListTile(
                   title: Text(content.isEmpty ? '(No content)' : content),
-                  subtitle: Text(postId),
                   onTap: () => showCommentsSheet(context: context, postId: postId, categoryId: 0),
                 ),
               );
