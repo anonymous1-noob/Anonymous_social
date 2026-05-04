@@ -6,6 +6,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../widgets/report_dialog.dart';
 import '../services/block_service.dart';
 import '../services/rate_limit_service.dart';
+import '../utils/hashtags.dart';
+import '../screens/tag_posts_screen.dart';
 
 /// Instagram-like comment thread widget designed to be embedded inside a
 /// DraggableScrollableSheet (bottom sheet).
@@ -348,6 +350,27 @@ class _CommentsThreadState extends State<CommentsThread> {
     );
   }
 
+
+
+  List<InlineSpan> _buildHashtagSpans(String text) {
+    final tokens = tokenizeHashtags(text);
+    return tokens.map((t) {
+      if (!t.isTag) return TextSpan(text: t.text);
+      return WidgetSpan(
+        alignment: PlaceholderAlignment.baseline,
+        baseline: TextBaseline.alphabetic,
+        child: InkWell(
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => TagPostsScreen(tag: t.text)),
+          ),
+          child: Text(
+            t.text,
+            style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.w700),
+          ),
+        ),
+      );
+    }).toList();
+  }
   Widget _commentRow({
     required Map<String, dynamic> c,
     required Map<String, int> likeCountByComment,
@@ -404,9 +427,11 @@ class _CommentsThreadState extends State<CommentsThread> {
                   ],
                 ),
                 const SizedBox(height: 6),
-                Text(
-                  content,
-                  style: const TextStyle(fontSize: 14, height: 1.25),
+                RichText(
+                  text: TextSpan(
+                    style: const TextStyle(fontSize: 14, height: 1.25, color: Colors.black),
+                    children: _buildHashtagSpans(content),
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Row(
