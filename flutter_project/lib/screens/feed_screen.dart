@@ -11,6 +11,8 @@ import '../widgets/report_dialog.dart';
 import '../services/block_service.dart';
 import '../services/saved_posts_service.dart';
 import '../services/poll_service.dart';
+import '../utils/hashtags.dart';
+import 'tag_posts_screen.dart';
 
 enum FeedSortMode { latest, trending, edgerank }
 
@@ -659,7 +661,7 @@ class _FeedScreenState extends State<FeedScreen> {
           style: const TextStyle(color: Colors.black, height: 1.25),
           children: [
             TextSpan(text: username, style: const TextStyle(fontWeight: FontWeight.w800)),
-            TextSpan(text: ' $caption'),
+            ..._buildHashtagSpans(' $caption'),
           ],
         ),
       );
@@ -674,7 +676,7 @@ class _FeedScreenState extends State<FeedScreen> {
               style: const TextStyle(color: Colors.black, height: 1.25),
               children: [
                 TextSpan(text: username, style: const TextStyle(fontWeight: FontWeight.w800)),
-                TextSpan(text: ' $caption'),
+                ..._buildHashtagSpans(' $caption'),
               ],
             ),
           ),
@@ -697,7 +699,7 @@ class _FeedScreenState extends State<FeedScreen> {
             style: const TextStyle(color: Colors.black, height: 1.25),
             children: [
               TextSpan(text: username, style: const TextStyle(fontWeight: FontWeight.w800)),
-              TextSpan(text: ' $shortCaption '),
+              ..._buildHashtagSpans(' $shortCaption '),
               const TextSpan(
                 text: 'more',
                 style: TextStyle(color: Colors.black54, fontWeight: FontWeight.w700),
@@ -711,6 +713,27 @@ class _FeedScreenState extends State<FeedScreen> {
     );
   }
 
+
+
+  List<InlineSpan> _buildHashtagSpans(String text) {
+    final tokens = tokenizeHashtags(text);
+    return tokens.map((t) {
+      if (!t.isTag) return TextSpan(text: t.text);
+      return WidgetSpan(
+        alignment: PlaceholderAlignment.baseline,
+        baseline: TextBaseline.alphabetic,
+        child: InkWell(
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => TagPostsScreen(tag: t.text)),
+          ),
+          child: Text(
+            t.text,
+            style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.w700),
+          ),
+        ),
+      );
+    }).toList();
+  }
   Widget _postCard({
     required Map<String, dynamic> post,
     required Map<String, int> commentCountByPost,
