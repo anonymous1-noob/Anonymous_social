@@ -30,6 +30,7 @@ class _FeedScreenState extends State<FeedScreen> {
 
   // Current user
   String? _currentUserId;
+  String? _ratingUserId;
   StreamSubscription<AuthState>? _authSub;
 
   // Like cache for posts (optimistic feel)
@@ -72,7 +73,10 @@ class _FeedScreenState extends State<FeedScreen> {
     _currentUserId = supabase.auth.currentUser?.id;
     _authSub = supabase.auth.onAuthStateChange.listen((data) {
       final user = data.session?.user;
-      setState(() => _currentUserId = user?.id);
+      setState(() {
+        _currentUserId = user?.id;
+        _ratingUserId = null;
+      });
       _fetchInitialLikes();
       _fetchInitialSaved();
       _fetchInitialRatings();
@@ -142,6 +146,61 @@ class _FeedScreenState extends State<FeedScreen> {
     }
   }
 
+  Future<String?> _currentPostRatingUserId() async {
+    final authUser = supabase.auth.currentUser;
+    final authId = authUser?.id ?? _currentUserId;
+    if (authId == null) return null;
+    if (_ratingUserId != null) return _ratingUserId;
+
+    try {
+      final row = await supabase
+          .from('users')
+          .select('id')
+          .eq('auth_id', authId)
+          .maybeSingle();
+      final publicUserId = (row?['id'] ?? '').toString();
+      if (publicUserId.isNotEmpty) {
+        _ratingUserId = publicUserId;
+        return publicUserId;
+      }
+    } catch (e, st) {
+      debugPrint('RATING USER LOOKUP ERROR: $e');
+      debugPrint('$st');
+    }
+
+    try {
+      final compactAuthId = authId.replaceAll('-', '');
+      final fallbackUsername = 'user_${compactAuthId.substring(0, 12)}';
+      final profile = <String, dynamic>{
+        'id': authId,
+        'auth_id': authId,
+        'username': fallbackUsername,
+      };
+      final email = authUser?.email;
+      if (email != null && email.trim().isNotEmpty) {
+        profile['email'] = email.trim();
+      }
+
+      final inserted = await supabase
+          .from('users')
+          .upsert(profile, onConflict: 'auth_id')
+          .select('id')
+          .single();
+      final publicUserId = (inserted['id'] ?? '').toString();
+      if (publicUserId.isNotEmpty) {
+        _ratingUserId = publicUserId;
+        return publicUserId;
+      }
+    } catch (e, st) {
+      debugPrint('RATING USER CREATE ERROR: $e');
+      debugPrint('$st');
+    }
+
+    _ratingUserId = authId;
+    return authId;
+  }
+
+
   // ✅ FIX: table name is post_likes (not posts_likes)
   Future<void> _fetchInitialLikes() async {
     final me = _currentUserId;
@@ -208,7 +267,8 @@ class _FeedScreenState extends State<FeedScreen> {
 }
 
   Future<void> _fetchInitialRatings() async {
-    final me = _currentUserId;
+    final me = await _currentPostRatingUserId();
+    final authId = _currentUserId;
     if (me == null) return;
 
     try {
@@ -229,7 +289,7 @@ class _FeedScreenState extends State<FeedScreen> {
         counts[pid] = (counts[pid] ?? 0) + 1;
 
         final uid = (row['user_id'] ?? '').toString();
-        if (uid == me) mine[pid] = rating;
+        if (uid == me || uid == authId) mine[pid] = rating;
       }
 
       if (!mounted) return;
@@ -269,7 +329,7 @@ class _FeedScreenState extends State<FeedScreen> {
   }
 
   Future<void> _ratePostDelta(String postId, int delta) async {
-    final me = _currentUserId;
+    final me = await _currentPostRatingUserId();
     if (me == null) return;
 
     final previousRating = _myPostRatings[postId] ?? 0;
