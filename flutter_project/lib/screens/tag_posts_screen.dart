@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../utils/hashtags.dart';
 import '../widgets/comments_sheet.dart';
 
 class TagPostsScreen extends StatefulWidget {
@@ -15,42 +16,23 @@ class _TagPostsScreenState extends State<TagPostsScreen> {
   final _supabase = Supabase.instance.client;
 
   Future<List<Map<String, dynamic>>> _fetchPosts() async {
-    final normalizedTag = widget.tag.startsWith('#') ? widget.tag : '#${widget.tag}';
-    final postRows = await _supabase
-        .from('posts')
-        .select('id, content, created_at')
-        .ilike('content', '%$normalizedTag%')
-        .order('created_at', ascending: false);
+    final normalizedTag = normalizeHashtag(widget.tag);
+    if (normalizedTag.isEmpty) return [];
 
-    final commentRows = await _supabase
-        .from('comments')
-        .select('post_id')
-        .ilike('content', '%$normalizedTag%');
+    final rows = await _supabase.rpc(
+      'get_posts_for_tag',
+      params: {'tag_name': normalizedTag},
+    );
 
-    final idsFromComments = commentRows
-        .map((e) => (e['post_id'] ?? '').toString())
-        .where((id) => id.isNotEmpty)
-        .toSet();
-
-    final existingIds = postRows.map((e) => (e['id'] ?? '').toString()).toSet();
-    final missingIds = idsFromComments.where((id) => !existingIds.contains(id)).toList();
-
-    if (missingIds.isNotEmpty) {
-      final extraPosts = await _supabase
-          .from('posts')
-          .select('id, content, created_at')
-          .inFilter('id', missingIds)
-          .order('created_at', ascending: false);
-      return [...postRows, ...extraPosts];
-    }
-
-    return List<Map<String, dynamic>>.from(postRows);
+    return List<Map<String, dynamic>>.from(rows);
   }
 
   @override
   Widget build(BuildContext context) {
+    final title = displayHashtag(widget.tag);
+
     return Scaffold(
-      appBar: AppBar(title: Text(widget.tag)),
+      appBar: AppBar(title: Text(title)),
       body: FutureBuilder<List<Map<String, dynamic>>>(
         future: _fetchPosts(),
         builder: (context, snap) {

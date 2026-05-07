@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../utils/hashtags.dart';
 import 'tag_posts_screen.dart';
 
 class CategoriesScreen extends ConsumerStatefulWidget {
@@ -22,29 +23,24 @@ class _CategoriesScreenState extends ConsumerState<CategoriesScreen> {
   final _searchController = TextEditingController();
   final _supabase = Supabase.instance.client;
 
-  Future<List<String>> _fetchTags() async {
-    final postRows = await _supabase.from('posts').select('content');
-    final commentRows = await _supabase.from('comments').select('content');
+  Future<List<Map<String, dynamic>>> _fetchTags() async {
+    final query = _searchController.text.trim();
+    final normalizedQuery = normalizeHashtag(query);
 
-    final tagRegex = RegExp(r'(?<!\w)#([A-Za-z0-9_]+)');
-    final tags = <String>{};
+    final baseQuery = _supabase
+        .from('tags')
+        .select('name, normalized_name, post_count')
+        .gt('post_count', 0);
 
-    void collectTags(List<dynamic> rows) {
-      for (final row in rows) {
-        final content = (row['content'] ?? '').toString();
-        for (final match in tagRegex.allMatches(content)) {
-          final raw = match.group(1);
-          if (raw == null || raw.isEmpty) continue;
-          tags.add('#${raw.toLowerCase()}');
-        }
-      }
-    }
+    final filteredQuery = normalizedQuery.isEmpty
+        ? baseQuery
+        : baseQuery.ilike('normalized_name', '%$normalizedQuery%');
 
-    collectTags(postRows);
-    collectTags(commentRows);
-
-    final sorted = tags.toList()..sort();
-    return sorted;
+    final rows = await filteredQuery
+        .order('post_count', ascending: false)
+        .order('normalized_name')
+        .limit(100);
+    return List<Map<String, dynamic>>.from(rows);
   }
 
   @override
@@ -55,8 +51,6 @@ class _CategoriesScreenState extends ConsumerState<CategoriesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final query = _searchController.text.trim().toLowerCase();
-
     return Scaffold(
       backgroundColor: const Color(0xFFF8F8FA),
       appBar: AppBar(
@@ -85,7 +79,7 @@ class _CategoriesScreenState extends ConsumerState<CategoriesScreen> {
                 ),
                 const SizedBox(height: 12),
                 Expanded(
-                  child: FutureBuilder<List<String>>(
+                  child: FutureBuilder<List<Map<String, dynamic>>>(
                     future: _fetchTags(),
                     builder: (context, snap) {
                       if (snap.connectionState == ConnectionState.waiting) {
@@ -102,27 +96,28 @@ class _CategoriesScreenState extends ConsumerState<CategoriesScreen> {
                       }
 
                       final tags = snap.data ?? [];
-                      final filtered = tags.where((tag) {
-                        return query.isEmpty || tag.contains(query);
-                      }).toList();
 
-                      if (filtered.isEmpty) {
+                      if (tags.isEmpty) {
                         return const Center(child: Text('No tags found'));
                       }
 
                       return ListView.separated(
-                        itemCount: filtered.length,
+                        itemCount: tags.length,
                         separatorBuilder: (_, __) => const Divider(height: 1),
                         itemBuilder: (context, index) {
-                          final tag = filtered[index];
+                          final row = tags[index];
+                          final tag = (row['name'] ?? '').toString();
+                          final normalized = (row['normalized_name'] ?? '').toString();
+                          final postCount = row['post_count'] ?? 0;
+                          final displayTag = tag.isNotEmpty ? tag : displayHashtag(normalized);
 
                           return ListTile(
                             leading: const Icon(Icons.tag),
-                            title: Text(tag),
-                            subtitle: const Text('Tap to view posts for this tag'),
+                            title: Text(displayTag),
+                            subtitle: Text('$postCount posts'),
                             trailing: const Icon(Icons.chevron_right),
                             onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => TagPostsScreen(tag: tag)),
+                              MaterialPageRoute(builder: (_) => TagPostsScreen(tag: displayTag)),
                             ),
                           );
                         },
