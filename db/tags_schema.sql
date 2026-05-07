@@ -65,7 +65,7 @@ SET search_path = public
 AS $$
 DECLARE
   normalized TEXT := lower(trim(leading '#' from COALESCE(tag_name, '')));
-  tag_id UUID;
+  v_tag_id UUID;
 BEGIN
   IF normalized = '' OR normalized !~ '^[a-z0-9_]+$' THEN
     RAISE EXCEPTION 'Invalid hashtag: %', tag_name;
@@ -75,9 +75,9 @@ BEGIN
   VALUES ('#' || normalized, normalized, NOW())
   ON CONFLICT (normalized_name) DO UPDATE
     SET updated_at = NOW()
-  RETURNING id INTO tag_id;
+  RETURNING id INTO v_tag_id;
 
-  RETURN tag_id;
+  RETURN v_tag_id;
 END;
 $$;
 
@@ -88,12 +88,12 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 BEGIN
-  DELETE FROM public.post_tags WHERE post_id = target_post_id;
+  DELETE FROM public.post_tags AS pt WHERE pt.post_id = target_post_id;
 
   INSERT INTO public.post_tags (post_id, tag_id)
-  SELECT DISTINCT post_id, tag_id
-  FROM public.post_tag_mentions
-  WHERE post_id = target_post_id
+  SELECT DISTINCT ptm.post_id, ptm.tag_id
+  FROM public.post_tag_mentions AS ptm
+  WHERE ptm.post_id = target_post_id
   ON CONFLICT DO NOTHING;
 END;
 $$;
@@ -130,27 +130,27 @@ SET search_path = public
 AS $$
 DECLARE
   tag TEXT;
-  tag_id UUID;
+  v_tag_id UUID;
   affected_tag_ids UUID[] := ARRAY[]::UUID[];
 BEGIN
-  SELECT COALESCE(array_agg(tag_id), ARRAY[]::UUID[]) INTO affected_tag_ids
-  FROM public.post_tag_mentions
-  WHERE source_type = 'post' AND source_id = target_post_id;
+  SELECT COALESCE(array_agg(ptm.tag_id), ARRAY[]::UUID[]) INTO affected_tag_ids
+  FROM public.post_tag_mentions AS ptm
+  WHERE ptm.source_type = 'post' AND ptm.source_id = target_post_id;
 
-  DELETE FROM public.post_tag_mentions
-  WHERE source_type = 'post' AND source_id = target_post_id;
+  DELETE FROM public.post_tag_mentions AS ptm
+  WHERE ptm.source_type = 'post' AND ptm.source_id = target_post_id;
 
   FOREACH tag IN ARRAY public.extract_hashtags(source_content)
   LOOP
-    tag_id := public.upsert_hashtag(tag);
-    affected_tag_ids := array_append(affected_tag_ids, tag_id);
+    v_tag_id := public.upsert_hashtag(tag);
+    affected_tag_ids := array_append(affected_tag_ids, v_tag_id);
     INSERT INTO public.post_tag_mentions (post_id, tag_id, source_type, source_id)
-    VALUES (target_post_id, tag_id, 'post', target_post_id)
+    VALUES (target_post_id, v_tag_id, 'post', target_post_id)
     ON CONFLICT DO NOTHING;
   END LOOP;
 
   PERFORM public.rebuild_post_tags_for_post(target_post_id);
-  SELECT array_agg(DISTINCT id) INTO affected_tag_ids FROM unnest(affected_tag_ids) AS ids(id);
+  SELECT array_agg(DISTINCT ids.id) INTO affected_tag_ids FROM unnest(affected_tag_ids) AS ids(id);
   PERFORM public.update_tag_post_counts(affected_tag_ids);
 END;
 $$;
@@ -163,30 +163,30 @@ SET search_path = public
 AS $$
 DECLARE
   tag TEXT;
-  tag_id UUID;
+  v_tag_id UUID;
   affected_post_id UUID;
   affected_tag_ids UUID[] := ARRAY[]::UUID[];
 BEGIN
-  SELECT post_id INTO affected_post_id
-  FROM public.post_tag_mentions
-  WHERE source_type = 'comment' AND source_id = target_comment_id
+  SELECT ptm.post_id INTO affected_post_id
+  FROM public.post_tag_mentions AS ptm
+  WHERE ptm.source_type = 'comment' AND ptm.source_id = target_comment_id
   LIMIT 1;
 
-  SELECT COALESCE(array_agg(tag_id), ARRAY[]::UUID[]) INTO affected_tag_ids
-  FROM public.post_tag_mentions
-  WHERE source_type = 'comment' AND source_id = target_comment_id;
+  SELECT COALESCE(array_agg(ptm.tag_id), ARRAY[]::UUID[]) INTO affected_tag_ids
+  FROM public.post_tag_mentions AS ptm
+  WHERE ptm.source_type = 'comment' AND ptm.source_id = target_comment_id;
 
   affected_post_id := COALESCE(affected_post_id, target_post_id);
 
-  DELETE FROM public.post_tag_mentions
-  WHERE source_type = 'comment' AND source_id = target_comment_id;
+  DELETE FROM public.post_tag_mentions AS ptm
+  WHERE ptm.source_type = 'comment' AND ptm.source_id = target_comment_id;
 
   FOREACH tag IN ARRAY public.extract_hashtags(source_content)
   LOOP
-    tag_id := public.upsert_hashtag(tag);
-    affected_tag_ids := array_append(affected_tag_ids, tag_id);
+    v_tag_id := public.upsert_hashtag(tag);
+    affected_tag_ids := array_append(affected_tag_ids, v_tag_id);
     INSERT INTO public.post_tag_mentions (post_id, tag_id, source_type, source_id)
-    VALUES (target_post_id, tag_id, 'comment', target_comment_id)
+    VALUES (target_post_id, v_tag_id, 'comment', target_comment_id)
     ON CONFLICT DO NOTHING;
   END LOOP;
 
@@ -196,7 +196,7 @@ BEGIN
   IF target_post_id IS NOT NULL AND target_post_id <> affected_post_id THEN
     PERFORM public.rebuild_post_tags_for_post(target_post_id);
   END IF;
-  SELECT array_agg(DISTINCT id) INTO affected_tag_ids FROM unnest(affected_tag_ids) AS ids(id);
+  SELECT array_agg(DISTINCT ids.id) INTO affected_tag_ids FROM unnest(affected_tag_ids) AS ids(id);
   PERFORM public.update_tag_post_counts(affected_tag_ids);
 END;
 $$;
@@ -211,12 +211,12 @@ DECLARE
   affected_tag_ids UUID[] := ARRAY[]::UUID[];
 BEGIN
   IF TG_OP = 'DELETE' THEN
-    SELECT COALESCE(array_agg(tag_id), ARRAY[]::UUID[]) INTO affected_tag_ids
-    FROM public.post_tag_mentions
-    WHERE source_type = 'post' AND source_id = OLD.id;
+    SELECT COALESCE(array_agg(ptm.tag_id), ARRAY[]::UUID[]) INTO affected_tag_ids
+    FROM public.post_tag_mentions AS ptm
+    WHERE ptm.source_type = 'post' AND ptm.source_id = OLD.id;
 
-    DELETE FROM public.post_tag_mentions
-    WHERE source_type = 'post' AND source_id = OLD.id;
+    DELETE FROM public.post_tag_mentions AS ptm
+    WHERE ptm.source_type = 'post' AND ptm.source_id = OLD.id;
     PERFORM public.rebuild_post_tags_for_post(OLD.id);
     PERFORM public.update_tag_post_counts(affected_tag_ids);
     RETURN OLD;
@@ -226,7 +226,7 @@ BEGIN
 
   IF TG_OP = 'UPDATE' AND OLD.is_deleted IS DISTINCT FROM NEW.is_deleted THEN
     PERFORM public.update_tag_post_counts(ARRAY(
-      SELECT DISTINCT tag_id FROM public.post_tag_mentions WHERE post_id = NEW.id
+      SELECT DISTINCT ptm.tag_id FROM public.post_tag_mentions AS ptm WHERE ptm.post_id = NEW.id
     ));
   END IF;
 
@@ -246,12 +246,12 @@ DECLARE
 BEGIN
   IF TG_OP = 'DELETE' THEN
     old_post_id := OLD.post_id;
-    SELECT COALESCE(array_agg(tag_id), ARRAY[]::UUID[]) INTO affected_tag_ids
-    FROM public.post_tag_mentions
-    WHERE source_type = 'comment' AND source_id = OLD.id;
+    SELECT COALESCE(array_agg(ptm.tag_id), ARRAY[]::UUID[]) INTO affected_tag_ids
+    FROM public.post_tag_mentions AS ptm
+    WHERE ptm.source_type = 'comment' AND ptm.source_id = OLD.id;
 
-    DELETE FROM public.post_tag_mentions
-    WHERE source_type = 'comment' AND source_id = OLD.id;
+    DELETE FROM public.post_tag_mentions AS ptm
+    WHERE ptm.source_type = 'comment' AND ptm.source_id = OLD.id;
     PERFORM public.rebuild_post_tags_for_post(old_post_id);
     PERFORM public.update_tag_post_counts(affected_tag_ids);
     RETURN OLD;
