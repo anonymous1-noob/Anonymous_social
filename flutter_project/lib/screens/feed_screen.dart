@@ -35,6 +35,11 @@ class _FeedScreenState extends State<FeedScreen> {
   // Like cache for posts (optimistic feel)
   final Set<String> _likedPostIds = {};
   final Map<String, int> _postLikeCounts = {};
+
+  // Rating cache for swipe-to-rate posts. Ratings are per user and clamped
+  // between -5 and +5. Aggregate scores power the visible score and sorting.
+  final Map<String, int> _myPostRatings = {};
+  final Map<String, int> _postRatingScores = {};
   final Map<String, int> commentCountByPost = {};
 
   // Saved posts
@@ -69,10 +74,12 @@ class _FeedScreenState extends State<FeedScreen> {
       final user = data.session?.user;
       setState(() => _currentUserId = user?.id);
       _fetchInitialLikes();
+      _fetchInitialRatings();
       _fetchInitialSaved();
     });
 
     _fetchInitialLikes();
+    _fetchInitialRatings();
     _fetchInitialSaved();
 
     _loadBlockedUsers();
@@ -173,32 +180,123 @@ class _FeedScreenState extends State<FeedScreen> {
   }
 
   double _edgeRankScore(Map<String, dynamic> p) {
-  final pid = (p['id'] ?? '').toString();
+    final pid = (p['id'] ?? '').toString();
 
-  final likes = _postLikeCounts[pid] ?? 0;
+    final likes = _postLikeCounts[pid] ?? 0;
+    final ratingScore = _postRatingScores[pid] ?? 0;
 
-  // ✅ FIXED COMMENTS (no extra map needed)
-  final comments =
-      (p['comments'] != null && p['comments'].isNotEmpty)
-          ? p['comments'][0]['count'] ?? 0
-          : 0;
+    // ✅ FIXED COMMENTS (no extra map needed)
+    final comments =
+        (p['comments'] != null && p['comments'].isNotEmpty)
+            ? p['comments'][0]['count'] ?? 0
+            : 0;
 
-  final createdAt = DateTime.tryParse((p['created_at'] ?? '').toString()) ?? DateTime.now();
-  final hours = DateTime.now().difference(createdAt.toLocal()).inHours;
+    final createdAt = DateTime.tryParse((p['created_at'] ?? '').toString()) ?? DateTime.now();
+    final hours = DateTime.now().difference(createdAt.toLocal()).inHours;
 
-  final decay = 1 / (1 + (hours / 12));
+    final decay = 1 / (1 + (hours / 12));
 
-  final weight = (likes * 1.0) + (comments * 2.0);
+    final weight = (likes * 1.0) + (comments * 2.0) + (ratingScore * 1.5);
 
-  double affinity = 1.0;
-  if (_currentUserId != null && p['user_id'] == _currentUserId) {
-    affinity = 2.0;
+    double affinity = 1.0;
+    if (_currentUserId != null && p['user_id'] == _currentUserId) {
+      affinity = 2.0;
+    }
+
+    final random = (DateTime.now().millisecondsSinceEpoch % 1000) / 1000;
+
+    return (affinity * (1 + weight) * decay) + (random * 0.1);
   }
 
-  final random = (DateTime.now().millisecondsSinceEpoch % 1000) / 1000;
+  Future<void> _fetchInitialRatings() async {
+    final me = _currentUserId;
+    if (me == null) return;
 
-  return (affinity * (1 + weight) * decay) + (random * 0.1);
-}
+    try {
+      final ratings = await supabase
+          .from('post_ratings')
+          .select('post_id, user_id, rating');
+
+      final Map<String, int> mine = {};
+      final Map<String, int> scores = {};
+
+      for (final row in ratings) {
+        final pid = (row['post_id'] ?? '').toString();
+        if (pid.isEmpty) continue;
+
+        final rating = _parseRating(row['rating']);
+        scores[pid] = (scores[pid] ?? 0) + rating;
+
+        final uid = (row['user_id'] ?? '').toString();
+        if (uid == me) mine[pid] = rating;
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _myPostRatings
+          ..clear()
+          ..addAll(mine);
+
+        _postRatingScores
+          ..clear()
+          ..addAll(scores);
+      });
+    } catch (e, st) {
+      debugPrint('FETCH RATINGS ERROR: $e');
+      debugPrint('$st');
+    }
+  }
+
+  int _parseRating(dynamic value) {
+    if (value is int) return value.clamp(-5, 5).toInt();
+    return (int.tryParse((value ?? '0').toString()) ?? 0)
+        .clamp(-5, 5)
+        .toInt();
+  }
+
+  Future<void> _ratePostBySwipe(String postId, int delta) async {
+    final me = _currentUserId;
+    if (me == null) return;
+
+    final previousRating = _myPostRatings[postId] ?? 0;
+    final nextRating = (previousRating + delta).clamp(-5, 5).toInt();
+    if (nextRating == previousRating) return;
+
+    setState(() {
+      _myPostRatings[postId] = nextRating;
+      _postRatingScores[postId] =
+          (_postRatingScores[postId] ?? 0) - previousRating + nextRating;
+    });
+
+    try {
+      await supabase.from('post_ratings').upsert(
+        {
+          'post_id': postId,
+          'user_id': me,
+          'rating': nextRating,
+        },
+        onConflict: 'post_id,user_id',
+      );
+    } catch (e, st) {
+      debugPrint('POST RATING ERROR: $e');
+      debugPrint('$st');
+
+      if (!mounted) return;
+      setState(() {
+        if (previousRating == 0) {
+          _myPostRatings.remove(postId);
+        } else {
+          _myPostRatings[postId] = previousRating;
+        }
+        _postRatingScores[postId] =
+            (_postRatingScores[postId] ?? 0) - nextRating + previousRating;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Rating failed: $e')),
+      );
+    }
+  }
 
   Future<void> _fetchInitialSaved() async {
     final me = _currentUserId;
@@ -622,7 +720,7 @@ class _FeedScreenState extends State<FeedScreen> {
           const SizedBox(height: 12),
           _sidebarItem(icon: Icons.settings_outlined, label: "Settings", onTap: () {}),
           const Spacer(),
-          const Text("Tip: Tap ❤️ to like, 💬 to comment.",
+          const Text("Tip: Swipe right to rate up, left to rate down.",
               style: TextStyle(color: Colors.black54, fontSize: 12)),
         ],
       ),
@@ -734,6 +832,46 @@ class _FeedScreenState extends State<FeedScreen> {
       );
     }).toList();
   }
+
+  Widget _ratingPill({
+    required int myRating,
+    required int ratingScore,
+  }) {
+    final ratingText = myRating == 0
+        ? 'Swipe to rate'
+        : 'Your rate ${myRating > 0 ? '+$myRating' : myRating}';
+    final scoreText = ratingScore == 0
+        ? 'Score 0'
+        : 'Score ${ratingScore > 0 ? '+$ratingScore' : ratingScore}';
+
+    return Tooltip(
+      message: 'Swipe right to increase, left to decrease. Range: -5 to +5.',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.indigo.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.indigo.withOpacity(0.18)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.swipe, size: 16, color: Colors.indigo),
+            const SizedBox(width: 6),
+            Text(
+              '$ratingText • $scoreText',
+              style: const TextStyle(
+                color: Colors.indigo,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _postCard({
     required Map<String, dynamic> post,
     required Map<String, int> commentCountByPost,
@@ -750,36 +888,35 @@ class _FeedScreenState extends State<FeedScreen> {
 
     final isLiked = _likedPostIds.contains(postId);
     final likeCount = _postLikeCounts[postId] ?? 0;
+    final myRating = _myPostRatings[postId] ?? 0;
+    final ratingScore = _postRatingScores[postId] ?? 0;
 
     final isSaved = _savedPostIds.contains(postId);
 
     final commentCount = commentCountByPost[postId] ?? 0;
 
     bool expanded = false;
-    bool showHeart = false;
-    Timer? heartTimer;
-
-    void triggerHeartBurst() {
-      heartTimer?.cancel();
-      setState(() => showHeart = true);
-      heartTimer = Timer(const Duration(milliseconds: 650), () {
-        if (!mounted) return;
-        setState(() => showHeart = false);
-      });
-    }
-
     final time = _timeAgo(createdAt);
 
     return StatefulBuilder(
       builder: (context, setLocal) {
-        return Card(
-          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-            side: BorderSide(color: Colors.grey.shade200),
-          ),
-          child: Column(
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onHorizontalDragEnd: (details) {
+            final velocity = details.primaryVelocity ?? 0;
+            if (velocity.abs() < 250) return;
+
+            // Right swipe increases the user's rating. Left swipe decreases it.
+            _ratePostBySwipe(postId, velocity > 0 ? 1 : -1);
+          },
+          child: Card(
+            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+              side: BorderSide(color: Colors.grey.shade200),
+            ),
+            child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
@@ -838,12 +975,22 @@ class _FeedScreenState extends State<FeedScreen> {
                 ),
               ),
 
-              if (likeCount > 0)
-                Padding(
-                  padding: const EdgeInsets.only(left: 12, top: 2),
-                  child: Text('$likeCount likes',
-                      style: const TextStyle(fontWeight: FontWeight.w800)),
+              Padding(
+                padding: const EdgeInsets.only(left: 12, right: 12, top: 2),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    if (likeCount > 0)
+                      Text(
+                        '$likeCount likes',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    _ratingPill(myRating: myRating, ratingScore: ratingScore),
+                  ],
                 ),
+              ),
 
               if (content.trim().isNotEmpty) ...[
                 const SizedBox(height: 6),
@@ -926,6 +1073,7 @@ class _FeedScreenState extends State<FeedScreen> {
 
             ],
           ),
+        ),
         );
       },
     );
@@ -1076,13 +1224,14 @@ class _FeedScreenState extends State<FeedScreen> {
                             double score(Map<String, dynamic> p) {
                               final pid = (p['id'] ?? '').toString();
                               final likes = _postLikeCounts[pid] ?? 0;
+                              final ratingScore = _postRatingScores[pid] ?? 0;
                               final comments = commentCountByPost[pid] ?? 0;
 
                               final createdAt = DateTime.tryParse((p['created_at'] ?? '').toString()) ?? DateTime.now();
                               final ageHrs = DateTime.now().difference(createdAt.toLocal()).inMinutes / 60.0;
 
                               // Simple Reddit-like hot score: engagement / time.
-                              final engagement = (likes * 2) + (comments * 3);
+                              final engagement = (likes * 2) + (comments * 3) + (ratingScore * 2);
                               final denom = (ageHrs + 2.0);
                               return engagement / denom;
                             }

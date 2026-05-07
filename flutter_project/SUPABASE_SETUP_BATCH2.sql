@@ -53,3 +53,16 @@ create table if not exists public.reports (
 -- 5) Minimal RLS suggestions (optional):
 -- Enable RLS and add policies per your security model.
 -- You likely already have RLS enabled.
+
+-- 6) Swipe-to-rate posts (-5 to +5 per user)
+create table if not exists public.post_ratings (
+  id serial primary key,
+  post_id uuid not null references public.posts(id) on delete cascade,
+  user_id uuid not null references public.users(id) on delete cascade,
+  rating int not null check (rating between -5 and 5),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (post_id, user_id)
+);
+
+create index if not exists idx_post_ratings_post_id on public.post_ratings(post_id);
