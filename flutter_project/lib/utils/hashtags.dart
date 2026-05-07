@@ -5,7 +5,32 @@ class HashtagToken {
   const HashtagToken(this.text, {required this.isTag});
 }
 
-final RegExp hashtagRegex = RegExp(r'(^|\s)(#[A-Za-z0-9_]+)');
+/// Matches hashtags that start at the beginning of the string or after a
+/// non-word character. Valid tag characters are ASCII letters, numbers, and
+/// underscores so the client parser matches the database indexer.
+final RegExp hashtagRegex = RegExp(r'(^|[^A-Za-z0-9_])(#[A-Za-z0-9_]+)');
+
+String normalizeHashtag(String tag) {
+  final trimmed = tag.trim();
+  final withoutPrefix = trimmed.startsWith('#') ? trimmed.substring(1) : trimmed;
+  return withoutPrefix.toLowerCase();
+}
+
+String displayHashtag(String tag) {
+  final normalized = normalizeHashtag(tag);
+  return normalized.isEmpty ? '#' : '#$normalized';
+}
+
+List<String> extractHashtags(String input) {
+  final tags = <String>{};
+  for (final match in hashtagRegex.allMatches(input)) {
+    final tag = match.group(2);
+    if (tag == null || tag.isEmpty) continue;
+    final normalized = normalizeHashtag(tag);
+    if (normalized.isNotEmpty) tags.add(normalized);
+  }
+  return tags.toList()..sort();
+}
 
 List<HashtagToken> tokenizeHashtags(String input) {
   final tokens = <HashtagToken>[];
