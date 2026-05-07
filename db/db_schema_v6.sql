@@ -73,7 +73,18 @@ CREATE TABLE IF NOT EXISTS public.post_dislikes (
   UNIQUE (post_id, user_id)
 );
 
--- 8️⃣ COMMENTS
+-- 8️⃣ POST RATINGS (-5 to +5; one rating per user per post)
+CREATE TABLE IF NOT EXISTS public.post_ratings (
+  id SERIAL PRIMARY KEY,
+  post_id UUID REFERENCES public.posts(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+  rating INT NOT NULL CHECK (rating BETWEEN -5 AND 5),
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE (post_id, user_id)
+);
+
+-- 9️⃣ COMMENTS
 CREATE TABLE IF NOT EXISTS public.comments (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   post_id UUID REFERENCES public.posts(id) ON DELETE CASCADE,
@@ -86,7 +97,7 @@ CREATE TABLE IF NOT EXISTS public.comments (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
--- 9️⃣ COMMENT LIKES
+-- 🔟 COMMENT LIKES
 CREATE TABLE IF NOT EXISTS public.comment_likes (
   id SERIAL PRIMARY KEY,
   comment_id UUID REFERENCES public.comments(id) ON DELETE CASCADE,
@@ -94,7 +105,7 @@ CREATE TABLE IF NOT EXISTS public.comment_likes (
   UNIQUE (comment_id, user_id)
 );
 
--- 🔟 COMMENT DISLIKES
+-- 1️⃣1️⃣ COMMENT DISLIKES
 CREATE TABLE IF NOT EXISTS public.comment_dislikes (
   id SERIAL PRIMARY KEY,
   comment_id UUID REFERENCES public.comments(id) ON DELETE CASCADE,

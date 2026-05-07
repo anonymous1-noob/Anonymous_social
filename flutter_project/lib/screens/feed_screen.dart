@@ -30,12 +30,18 @@ class _FeedScreenState extends State<FeedScreen> {
 
   // Current user
   String? _currentUserId;
+  String? _ratingUserId;
   StreamSubscription<AuthState>? _authSub;
 
   // Like cache for posts (optimistic feel)
   final Set<String> _likedPostIds = {};
   final Map<String, int> _postLikeCounts = {};
   final Map<String, int> commentCountByPost = {};
+
+  // Rating cache for swipe-based post scores (-5 to +5).
+  final Map<String, int> _myPostRatings = {};
+  final Map<String, int> _postRatingSums = {};
+  final Map<String, int> _postRatingCounts = {};
 
   // Saved posts
   final Set<String> _savedPostIds = {};
@@ -67,13 +73,18 @@ class _FeedScreenState extends State<FeedScreen> {
     _currentUserId = supabase.auth.currentUser?.id;
     _authSub = supabase.auth.onAuthStateChange.listen((data) {
       final user = data.session?.user;
-      setState(() => _currentUserId = user?.id);
+      setState(() {
+        _currentUserId = user?.id;
+        _ratingUserId = null;
+      });
       _fetchInitialLikes();
       _fetchInitialSaved();
+      _fetchInitialRatings();
     });
 
     _fetchInitialLikes();
     _fetchInitialSaved();
+    _fetchInitialRatings();
 
     _loadBlockedUsers();
     _loadCategoryName();
@@ -134,6 +145,61 @@ class _FeedScreenState extends State<FeedScreen> {
       // ignore
     }
   }
+
+  Future<String?> _currentPostRatingUserId() async {
+    final authUser = supabase.auth.currentUser;
+    final authId = authUser?.id ?? _currentUserId;
+    if (authId == null) return null;
+    if (_ratingUserId != null) return _ratingUserId;
+
+    try {
+      final row = await supabase
+          .from('users')
+          .select('id')
+          .eq('auth_id', authId)
+          .maybeSingle();
+      final publicUserId = (row?['id'] ?? '').toString();
+      if (publicUserId.isNotEmpty) {
+        _ratingUserId = publicUserId;
+        return publicUserId;
+      }
+    } catch (e, st) {
+      debugPrint('RATING USER LOOKUP ERROR: $e');
+      debugPrint('$st');
+    }
+
+    try {
+      final compactAuthId = authId.replaceAll('-', '');
+      final fallbackUsername = 'user_${compactAuthId.substring(0, 12)}';
+      final profile = <String, dynamic>{
+        'id': authId,
+        'auth_id': authId,
+        'username': fallbackUsername,
+      };
+      final email = authUser?.email;
+      if (email != null && email.trim().isNotEmpty) {
+        profile['email'] = email.trim();
+      }
+
+      final inserted = await supabase
+          .from('users')
+          .upsert(profile, onConflict: 'auth_id')
+          .select('id')
+          .single();
+      final publicUserId = (inserted['id'] ?? '').toString();
+      if (publicUserId.isNotEmpty) {
+        _ratingUserId = publicUserId;
+        return publicUserId;
+      }
+    } catch (e, st) {
+      debugPrint('RATING USER CREATE ERROR: $e');
+      debugPrint('$st');
+    }
+
+    _ratingUserId = authId;
+    return authId;
+  }
+
 
   // ✅ FIX: table name is post_likes (not posts_likes)
   Future<void> _fetchInitialLikes() async {
@@ -199,6 +265,117 @@ class _FeedScreenState extends State<FeedScreen> {
 
   return (affinity * (1 + weight) * decay) + (random * 0.1);
 }
+
+  Future<void> _fetchInitialRatings() async {
+    final me = await _currentPostRatingUserId();
+    final authId = _currentUserId;
+    if (me == null) return;
+
+    try {
+      final ratings = await supabase
+          .from('post_ratings')
+          .select('post_id, user_id, rating');
+
+      final Map<String, int> mine = {};
+      final Map<String, int> sums = {};
+      final Map<String, int> counts = {};
+
+      for (final row in ratings) {
+        final pid = (row['post_id'] ?? '').toString();
+        if (pid.isEmpty) continue;
+
+        final rating = _clampRating(row['rating']);
+        sums[pid] = (sums[pid] ?? 0) + rating;
+        counts[pid] = (counts[pid] ?? 0) + 1;
+
+        final uid = (row['user_id'] ?? '').toString();
+        if (uid == me || uid == authId) mine[pid] = rating;
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _myPostRatings
+          ..clear()
+          ..addAll(mine);
+        _postRatingSums
+          ..clear()
+          ..addAll(sums);
+        _postRatingCounts
+          ..clear()
+          ..addAll(counts);
+      });
+    } catch (e, st) {
+      debugPrint('FETCH RATINGS ERROR: $e');
+      debugPrint('$st');
+    }
+  }
+
+  int _clampRating(dynamic value) {
+    final parsed = value is int ? value : int.tryParse(value?.toString() ?? '') ?? 0;
+    return parsed.clamp(-5, 5).toInt();
+  }
+
+  String _formatSigned(num value) {
+    if (value > 0) return '+$value';
+    return value.toString();
+  }
+
+  String _formatAverageRating(String postId) {
+    final count = _postRatingCounts[postId] ?? 0;
+    if (count == 0) return 'No ratings yet';
+    final avg = (_postRatingSums[postId] ?? 0) / count;
+    final prefix = avg > 0 ? '+' : '';
+    return '$prefix${avg.toStringAsFixed(1)} avg • $count ${count == 1 ? 'rating' : 'ratings'}';
+  }
+
+  Future<void> _ratePostDelta(String postId, int delta) async {
+    final me = await _currentPostRatingUserId();
+    if (me == null) return;
+
+    final previousRating = _myPostRatings[postId] ?? 0;
+    final nextRating = (previousRating + delta).clamp(-5, 5).toInt();
+    if (nextRating == previousRating) return;
+
+    final hadPreviousRating = _myPostRatings.containsKey(postId);
+    final previousSum = _postRatingSums[postId] ?? 0;
+    final previousCount = _postRatingCounts[postId] ?? 0;
+
+    setState(() {
+      _myPostRatings[postId] = nextRating;
+      _postRatingSums[postId] = previousSum - previousRating + nextRating;
+      _postRatingCounts[postId] = hadPreviousRating ? previousCount : previousCount + 1;
+    });
+
+    try {
+      await supabase.from('post_ratings').upsert(
+        {
+          'post_id': postId,
+          'user_id': me,
+          'rating': nextRating,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        onConflict: 'post_id,user_id',
+      );
+    } catch (e, st) {
+      debugPrint('POST RATING ERROR: $e');
+      debugPrint('$st');
+
+      if (!mounted) return;
+      setState(() {
+        if (hadPreviousRating) {
+          _myPostRatings[postId] = previousRating;
+        } else {
+          _myPostRatings.remove(postId);
+        }
+        _postRatingSums[postId] = previousSum;
+        _postRatingCounts[postId] = previousCount;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Rating failed: $e')),
+      );
+    }
+  }
 
   Future<void> _fetchInitialSaved() async {
     final me = _currentUserId;
@@ -544,10 +721,10 @@ class _FeedScreenState extends State<FeedScreen> {
                   ),
                 ],
                 const SizedBox(height: 8),
-              ],
-            ),
+            ],
           ),
-        );
+        ),
+      );
       },
     );
 
@@ -756,30 +933,28 @@ class _FeedScreenState extends State<FeedScreen> {
     final commentCount = commentCountByPost[postId] ?? 0;
 
     bool expanded = false;
-    bool showHeart = false;
-    Timer? heartTimer;
-
-    void triggerHeartBurst() {
-      heartTimer?.cancel();
-      setState(() => showHeart = true);
-      heartTimer = Timer(const Duration(milliseconds: 650), () {
-        if (!mounted) return;
-        setState(() => showHeart = false);
-      });
-    }
 
     final time = _timeAgo(createdAt);
 
     return StatefulBuilder(
       builder: (context, setLocal) {
-        return Card(
-          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-            side: BorderSide(color: Colors.grey.shade200),
-          ),
-          child: Column(
+        final myRating = _myPostRatings[postId] ?? 0;
+
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onHorizontalDragEnd: (details) {
+            final velocity = details.primaryVelocity ?? 0;
+            if (velocity.abs() < 200) return;
+            _ratePostDelta(postId, velocity > 0 ? 1 : -1);
+          },
+          child: Card(
+            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+              side: BorderSide(color: Colors.grey.shade200),
+            ),
+            child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
@@ -838,12 +1013,66 @@ class _FeedScreenState extends State<FeedScreen> {
                 ),
               ),
 
-              if (likeCount > 0)
-                Padding(
-                  padding: const EdgeInsets.only(left: 12, top: 2),
-                  child: Text('$likeCount likes',
-                      style: const TextStyle(fontWeight: FontWeight.w800)),
+              Padding(
+                padding: const EdgeInsets.only(left: 12, right: 12, top: 2),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    if (likeCount > 0)
+                      Text(
+                        '$likeCount likes',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: myRating == 0
+                            ? const Color(0xFFF3F4F6)
+                            : (myRating > 0
+                                ? const Color(0xFFEFFDF5)
+                                : const Color(0xFFFEF2F2)),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: myRating == 0
+                              ? const Color(0xFFE5E7EB)
+                              : (myRating > 0
+                                  ? const Color(0xFF86EFAC)
+                                  : const Color(0xFFFCA5A5)),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            myRating > 0
+                                ? Icons.trending_up
+                                : (myRating < 0 ? Icons.trending_down : Icons.swipe),
+                            size: 16,
+                            color: myRating > 0
+                                ? const Color(0xFF15803D)
+                                : (myRating < 0 ? const Color(0xFFB91C1C) : Colors.black54),
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            'Your rate ${_formatSigned(myRating)}',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      _formatAverageRating(postId),
+                      style: const TextStyle(
+                        color: Colors.black54,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
                 ),
+              ),
 
               if (content.trim().isNotEmpty) ...[
                 const SizedBox(height: 6),
@@ -922,11 +1151,31 @@ class _FeedScreenState extends State<FeedScreen> {
                 ),
               ),
 
-              const SizedBox(height: 10),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                child: Row(
+                  children: const [
+                    Icon(Icons.swipe_left, size: 16, color: Colors.black45),
+                    SizedBox(width: 4),
+                    Text(
+                      'Swipe left -1',
+                      style: TextStyle(color: Colors.black45, fontSize: 12),
+                    ),
+                    Spacer(),
+                    Text(
+                      'Swipe right +1',
+                      style: TextStyle(color: Colors.black45, fontSize: 12),
+                    ),
+                    SizedBox(width: 4),
+                    Icon(Icons.swipe_right, size: 16, color: Colors.black45),
+                  ],
+                ),
+              ),
 
             ],
           ),
-        );
+        ),
+      );
       },
     );
   }
@@ -985,6 +1234,7 @@ class _FeedScreenState extends State<FeedScreen> {
                     setState(() => _refreshing = true);
                     await Future.delayed(const Duration(milliseconds: 350));
                     await _fetchInitialLikes();
+                    await _fetchInitialRatings();
                     if (mounted) setState(() => _refreshing = false);
                   },
                   child: StreamBuilder<List<Map<String, dynamic>>>(
