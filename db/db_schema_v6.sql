@@ -77,12 +77,18 @@ CREATE TABLE IF NOT EXISTS public.post_dislikes (
 CREATE TABLE IF NOT EXISTS public.post_ratings (
   id SERIAL PRIMARY KEY,
   post_id UUID REFERENCES public.posts(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+  -- Stores supabase.auth.currentUser.id. Do not reference public.users(id);
+  -- public.users.id can differ from auth.users.id in this app.
+  user_id UUID NOT NULL,
   rating INT NOT NULL CHECK (rating BETWEEN -5 AND 5),
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW(),
   UNIQUE (post_id, user_id)
 );
+
+-- Existing installs from an earlier draft may have this incorrect FK.
+ALTER TABLE IF EXISTS public.post_ratings
+  DROP CONSTRAINT IF EXISTS post_ratings_user_id_fkey;
 
 -- 9️⃣ COMMENTS
 CREATE TABLE IF NOT EXISTS public.comments (
