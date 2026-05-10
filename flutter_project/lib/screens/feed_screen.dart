@@ -1154,49 +1154,52 @@ class _FeedScreenState extends State<FeedScreen> {
               ),
 
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    activeTrackColor: ratingColor,
-                    inactiveTrackColor: const Color(0xFFE2E8F0),
-                    overlayColor: ratingColor.withOpacity(0.14),
-                    thumbColor: ratingColor,
-                    trackHeight: isRatingSliderActive ? 8 : 6,
-                    thumbShape: RoundSliderThumbShape(
-                      enabledThumbRadius: isRatingSliderActive ? 12 : 10,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: SizedBox(
+                  height: 32,
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      activeTrackColor: ratingColor,
+                      inactiveTrackColor: const Color(0xFFE2E8F0),
+                      overlayColor: ratingColor.withOpacity(0.14),
+                      thumbColor: ratingColor,
+                      trackHeight: isRatingSliderActive ? 8 : 6,
+                      thumbShape: RoundSliderThumbShape(
+                        enabledThumbRadius: isRatingSliderActive ? 12 : 10,
+                      ),
+                      valueIndicatorColor: ratingColor,
+                      valueIndicatorTextStyle: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
-                    valueIndicatorColor: ratingColor,
-                    valueIndicatorTextStyle: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w900,
+                    child: Slider(
+                      min: -5,
+                      max: 5,
+                      divisions: 10,
+                      value: draftRating,
+                      label: '$ratingEmoji ${_formatSigned(myRating)}',
+                      onChangeStart: (_) {
+                        HapticFeedback.lightImpact();
+                        setLocal(() => isRatingSliderActive = true);
+                      },
+                      onChanged: (value) {
+                        final nextRating = value.round();
+                        if (nextRating != lastHapticRating) {
+                          HapticFeedback.selectionClick();
+                          lastHapticRating = nextRating;
+                        }
+                        setLocal(() => draftRating = nextRating.toDouble());
+                      },
+                      onChangeEnd: (value) {
+                        final nextRating = value.round();
+                        setLocal(() {
+                          draftRating = nextRating.toDouble();
+                          isRatingSliderActive = false;
+                        });
+                        _ratePost(postId, nextRating);
+                      },
                     ),
-                  ),
-                  child: Slider(
-                    min: -5,
-                    max: 5,
-                    divisions: 10,
-                    value: draftRating,
-                    label: '$ratingEmoji ${_formatSigned(myRating)}',
-                    onChangeStart: (_) {
-                      HapticFeedback.lightImpact();
-                      setLocal(() => isRatingSliderActive = true);
-                    },
-                    onChanged: (value) {
-                      final nextRating = value.round();
-                      if (nextRating != lastHapticRating) {
-                        HapticFeedback.selectionClick();
-                        lastHapticRating = nextRating;
-                      }
-                      setLocal(() => draftRating = nextRating.toDouble());
-                    },
-                    onChangeEnd: (value) {
-                      final nextRating = value.round();
-                      setLocal(() {
-                        draftRating = nextRating.toDouble();
-                        isRatingSliderActive = false;
-                      });
-                      _ratePost(postId, nextRating);
-                    },
                   ),
                 ),
               ),
