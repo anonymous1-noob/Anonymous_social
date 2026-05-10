@@ -948,19 +948,6 @@ class _FeedScreenState extends State<FeedScreen> {
             ? const Color(0xFF16A34A)
             : (myRating < 0 ? const Color(0xFFDC2626) : const Color(0xFF64748B));
         final ratingEmoji = myRating > 0 ? '🔥' : (myRating < 0 ? '😕' : '😐');
-        final ratingLabel = myRating > 0
-            ? 'Fire'
-            : (myRating < 0 ? 'Not it' : 'Neutral');
-
-        void updateDraftRating(int rating, {bool save = false}) {
-          final nextRating = rating.clamp(-5, 5).toInt();
-          HapticFeedback.selectionClick();
-          setLocal(() {
-            draftRating = nextRating.toDouble();
-            lastHapticRating = nextRating;
-          });
-          if (save) _ratePost(postId, nextRating);
-        }
 
         return Card(
           margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1168,180 +1155,48 @@ class _FeedScreenState extends State<FeedScreen> {
 
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 160),
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-                  decoration: BoxDecoration(
-                    color: isRatingSliderActive
-                        ? ratingColor.withOpacity(0.08)
-                        : const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: isRatingSliderActive
-                          ? ratingColor.withOpacity(0.45)
-                          : const Color(0xFFE5E7EB),
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    activeTrackColor: ratingColor,
+                    inactiveTrackColor: const Color(0xFFE2E8F0),
+                    overlayColor: ratingColor.withOpacity(0.14),
+                    thumbColor: ratingColor,
+                    trackHeight: isRatingSliderActive ? 8 : 6,
+                    thumbShape: RoundSliderThumbShape(
+                      enabledThumbRadius: isRatingSliderActive ? 12 : 10,
+                    ),
+                    valueIndicatorColor: ratingColor,
+                    valueIndicatorTextStyle: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
                     ),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          const Text(
-                            'Emoji rate',
-                            style: TextStyle(
-                              color: Colors.black54,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          const Spacer(),
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 160),
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                            decoration: BoxDecoration(
-                              color: ratingColor.withOpacity(0.12),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                AnimatedSwitcher(
-                                  duration: const Duration(milliseconds: 140),
-                                  transitionBuilder: (child, animation) => ScaleTransition(
-                                    scale: animation,
-                                    child: child,
-                                  ),
-                                  child: Text(
-                                    ratingEmoji,
-                                    key: ValueKey(ratingEmoji),
-                                    style: const TextStyle(fontSize: 18),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  '$ratingLabel ${_formatSigned(myRating)}',
-                                  style: TextStyle(
-                                    color: ratingColor,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      const Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text('😕', style: TextStyle(fontSize: 20)),
-                          Text('😐', style: TextStyle(fontSize: 20)),
-                          Text('🔥', style: TextStyle(fontSize: 20)),
-                        ],
-                      ),
-                      const SizedBox(height: 2),
-                      Row(
-                        children: [
-                          Container(
-                            width: 36,
-                            height: 36,
-                            decoration: const BoxDecoration(
-                              color: Color(0xFFF1F5F9),
-                              shape: BoxShape.circle,
-                            ),
-                            child: IconButton(
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-                              splashRadius: 18,
-                              tooltip: 'Decrease rating',
-                              onPressed: () => updateDraftRating(myRating - 1, save: true),
-                              icon: const Icon(Icons.remove, size: 18),
-                            ),
-                          ),
-                          Expanded(
-                            child: SliderTheme(
-                              data: SliderTheme.of(context).copyWith(
-                                activeTrackColor: ratingColor,
-                                inactiveTrackColor: const Color(0xFFE2E8F0),
-                                overlayColor: ratingColor.withOpacity(0.14),
-                                thumbColor: ratingColor,
-                                trackHeight: isRatingSliderActive ? 8 : 6,
-                                thumbShape: RoundSliderThumbShape(
-                                  enabledThumbRadius: isRatingSliderActive ? 12 : 10,
-                                ),
-                                valueIndicatorColor: ratingColor,
-                                valueIndicatorTextStyle: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                              child: Slider(
-                                min: -5,
-                                max: 5,
-                                divisions: 10,
-                                value: draftRating,
-                                label: _formatSigned(myRating),
-                                onChangeStart: (_) {
-                                  HapticFeedback.lightImpact();
-                                  setLocal(() => isRatingSliderActive = true);
-                                },
-                                onChanged: (value) {
-                                  final nextRating = value.round();
-                                  if (nextRating != lastHapticRating) {
-                                    HapticFeedback.selectionClick();
-                                    lastHapticRating = nextRating;
-                                  }
-                                  setLocal(() => draftRating = nextRating.toDouble());
-                                },
-                                onChangeEnd: (value) {
-                                  final nextRating = value.round();
-                                  setLocal(() {
-                                    draftRating = nextRating.toDouble();
-                                    isRatingSliderActive = false;
-                                  });
-                                  _ratePost(postId, nextRating);
-                                },
-                              ),
-                            ),
-                          ),
-                          Container(
-                            width: 36,
-                            height: 36,
-                            decoration: const BoxDecoration(
-                              color: Color(0xFFF1F5F9),
-                              shape: BoxShape.circle,
-                            ),
-                            child: IconButton(
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-                              splashRadius: 18,
-                              tooltip: 'Increase rating',
-                              onPressed: () => updateDraftRating(myRating + 1, save: true),
-                              icon: const Icon(Icons.add, size: 18),
-                            ),
-                          ),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          TextButton(
-                            onPressed: () => updateDraftRating(-5, save: true),
-                            child: const Text('😕 -5'),
-                          ),
-                          TextButton(
-                            onPressed: () => updateDraftRating(0, save: true),
-                            child: const Text('😐 0'),
-                          ),
-                          TextButton(
-                            onPressed: () => updateDraftRating(5, save: true),
-                            child: const Text('🔥 +5'),
-                          ),
-                        ],
-                      ),
-                    ],
+                  child: Slider(
+                    min: -5,
+                    max: 5,
+                    divisions: 10,
+                    value: draftRating,
+                    label: '$ratingEmoji ${_formatSigned(myRating)}',
+                    onChangeStart: (_) {
+                      HapticFeedback.lightImpact();
+                      setLocal(() => isRatingSliderActive = true);
+                    },
+                    onChanged: (value) {
+                      final nextRating = value.round();
+                      if (nextRating != lastHapticRating) {
+                        HapticFeedback.selectionClick();
+                        lastHapticRating = nextRating;
+                      }
+                      setLocal(() => draftRating = nextRating.toDouble());
+                    },
+                    onChangeEnd: (value) {
+                      final nextRating = value.round();
+                      setLocal(() {
+                        draftRating = nextRating.toDouble();
+                        isRatingSliderActive = false;
+                      });
+                      _ratePost(postId, nextRating);
+                    },
                   ),
                 ),
               ),
