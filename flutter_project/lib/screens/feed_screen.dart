@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -937,10 +938,28 @@ class _FeedScreenState extends State<FeedScreen> {
     final time = _timeAgo(createdAt);
 
     var draftRating = (_myPostRatings[postId] ?? 0).toDouble();
+    var isRatingSliderActive = false;
+    var lastHapticRating = draftRating.round();
 
     return StatefulBuilder(
       builder: (context, setLocal) {
         final myRating = draftRating.round();
+        final ratingColor = myRating > 0
+            ? const Color(0xFF16A34A)
+            : (myRating < 0 ? const Color(0xFFDC2626) : const Color(0xFF64748B));
+        final ratingLabel = myRating > 0
+            ? 'Boost'
+            : (myRating < 0 ? 'Lower' : 'Neutral');
+
+        void updateDraftRating(int rating, {bool save = false}) {
+          final nextRating = rating.clamp(-5, 5).toInt();
+          HapticFeedback.selectionClick();
+          setLocal(() {
+            draftRating = nextRating.toDouble();
+            lastHapticRating = nextRating;
+          });
+          if (save) _ratePost(postId, nextRating);
+        }
 
         return Card(
           margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1148,55 +1167,155 @@ class _FeedScreenState extends State<FeedScreen> {
 
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.remove_circle_outline, size: 16, color: Colors.black45),
-                        const SizedBox(width: 4),
-                        const Text(
-                          '-5',
-                          style: TextStyle(color: Colors.black45, fontSize: 12),
-                        ),
-                        const Spacer(),
-                        Text(
-                          'Slide to rate ${_formatSigned(myRating)}',
-                          style: const TextStyle(
-                            color: Colors.black54,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w800,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                  decoration: BoxDecoration(
+                    color: isRatingSliderActive
+                        ? ratingColor.withOpacity(0.08)
+                        : const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: isRatingSliderActive
+                          ? ratingColor.withOpacity(0.45)
+                          : const Color(0xFFE5E7EB),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          const Text(
+                            'Rate this post',
+                            style: TextStyle(
+                              color: Colors.black54,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
-                        ),
-                        const Spacer(),
-                        const Text(
-                          '+5',
-                          style: TextStyle(color: Colors.black45, fontSize: 12),
-                        ),
-                        const SizedBox(width: 4),
-                        const Icon(Icons.add_circle_outline, size: 16, color: Colors.black45),
-                      ],
-                    ),
-                    Slider(
-                      min: -5,
-                      max: 5,
-                      divisions: 10,
-                      value: draftRating,
-                      label: _formatSigned(myRating),
-                      activeColor: myRating >= 0
-                          ? const Color(0xFF16A34A)
-                          : const Color(0xFFDC2626),
-                      inactiveColor: const Color(0xFFE5E7EB),
-                      onChanged: (value) {
-                        setLocal(() => draftRating = value.roundToDouble());
-                      },
-                      onChangeEnd: (value) {
-                        final nextRating = value.round();
-                        setLocal(() => draftRating = nextRating.toDouble());
-                        _ratePost(postId, nextRating);
-                      },
-                    ),
-                  ],
+                          const Spacer(),
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 160),
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: ratingColor.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              '$ratingLabel ${_formatSigned(myRating)}',
+                              style: TextStyle(
+                                color: ratingColor,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFFF1F5F9),
+                              shape: BoxShape.circle,
+                            ),
+                            child: IconButton(
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+                              splashRadius: 18,
+                              tooltip: 'Decrease rating',
+                              onPressed: () => updateDraftRating(myRating - 1, save: true),
+                              icon: const Icon(Icons.remove, size: 18),
+                            ),
+                          ),
+                          Expanded(
+                            child: SliderTheme(
+                              data: SliderTheme.of(context).copyWith(
+                                activeTrackColor: ratingColor,
+                                inactiveTrackColor: const Color(0xFFE2E8F0),
+                                overlayColor: ratingColor.withOpacity(0.14),
+                                thumbColor: ratingColor,
+                                trackHeight: isRatingSliderActive ? 8 : 6,
+                                thumbShape: RoundSliderThumbShape(
+                                  enabledThumbRadius: isRatingSliderActive ? 12 : 10,
+                                ),
+                                valueIndicatorColor: ratingColor,
+                                valueIndicatorTextStyle: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              child: Slider(
+                                min: -5,
+                                max: 5,
+                                divisions: 10,
+                                value: draftRating,
+                                label: _formatSigned(myRating),
+                                onChangeStart: (_) {
+                                  HapticFeedback.lightImpact();
+                                  setLocal(() => isRatingSliderActive = true);
+                                },
+                                onChanged: (value) {
+                                  final nextRating = value.round();
+                                  if (nextRating != lastHapticRating) {
+                                    HapticFeedback.selectionClick();
+                                    lastHapticRating = nextRating;
+                                  }
+                                  setLocal(() => draftRating = nextRating.toDouble());
+                                },
+                                onChangeEnd: (value) {
+                                  final nextRating = value.round();
+                                  setLocal(() {
+                                    draftRating = nextRating.toDouble();
+                                    isRatingSliderActive = false;
+                                  });
+                                  _ratePost(postId, nextRating);
+                                },
+                              ),
+                            ),
+                          ),
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFFF1F5F9),
+                              shape: BoxShape.circle,
+                            ),
+                            child: IconButton(
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+                              splashRadius: 18,
+                              tooltip: 'Increase rating',
+                              onPressed: () => updateDraftRating(myRating + 1, save: true),
+                              icon: const Icon(Icons.add, size: 18),
+                            ),
+                          ),
+                        ],
+                      ),
+                      Row(
+                        children: [
+                          TextButton(
+                            onPressed: () => updateDraftRating(-5, save: true),
+                            child: const Text('-5'),
+                          ),
+                          const Spacer(),
+                          TextButton(
+                            onPressed: () => updateDraftRating(0, save: true),
+                            child: const Text('Neutral'),
+                          ),
+                          const Spacer(),
+                          TextButton(
+                            onPressed: () => updateDraftRating(5, save: true),
+                            child: const Text('+5'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
