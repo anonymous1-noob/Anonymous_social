@@ -947,9 +947,10 @@ class _FeedScreenState extends State<FeedScreen> {
         final ratingColor = myRating > 0
             ? const Color(0xFF16A34A)
             : (myRating < 0 ? const Color(0xFFDC2626) : const Color(0xFF64748B));
+        final ratingEmoji = myRating > 0 ? '🔥' : (myRating < 0 ? '😕' : '😐');
         final ratingLabel = myRating > 0
-            ? 'Boost'
-            : (myRating < 0 ? 'Lower' : 'Neutral');
+            ? 'Fire'
+            : (myRating < 0 ? 'Not it' : 'Neutral');
 
         void updateDraftRating(int rating, {bool save = false}) {
           final nextRating = rating.clamp(-5, 5).toInt();
@@ -1187,7 +1188,7 @@ class _FeedScreenState extends State<FeedScreen> {
                       Row(
                         children: [
                           const Text(
-                            'Rate this post',
+                            'Emoji rate',
                             style: TextStyle(
                               color: Colors.black54,
                               fontSize: 12,
@@ -1202,18 +1203,45 @@ class _FeedScreenState extends State<FeedScreen> {
                               color: ratingColor.withOpacity(0.12),
                               borderRadius: BorderRadius.circular(999),
                             ),
-                            child: Text(
-                              '$ratingLabel ${_formatSigned(myRating)}',
-                              style: TextStyle(
-                                color: ratingColor,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w900,
-                              ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                AnimatedSwitcher(
+                                  duration: const Duration(milliseconds: 140),
+                                  transitionBuilder: (child, animation) => ScaleTransition(
+                                    scale: animation,
+                                    child: child,
+                                  ),
+                                  child: Text(
+                                    ratingEmoji,
+                                    key: ValueKey(ratingEmoji),
+                                    style: const TextStyle(fontSize: 18),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  '$ratingLabel ${_formatSigned(myRating)}',
+                                  style: TextStyle(
+                                    color: ratingColor,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 8),
+                      const Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('😕', style: TextStyle(fontSize: 20)),
+                          Text('😐', style: TextStyle(fontSize: 20)),
+                          Text('🔥', style: TextStyle(fontSize: 20)),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
                       Row(
                         children: [
                           Container(
@@ -1297,20 +1325,19 @@ class _FeedScreenState extends State<FeedScreen> {
                         ],
                       ),
                       Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           TextButton(
                             onPressed: () => updateDraftRating(-5, save: true),
-                            child: const Text('-5'),
+                            child: const Text('😕 -5'),
                           ),
-                          const Spacer(),
                           TextButton(
                             onPressed: () => updateDraftRating(0, save: true),
-                            child: const Text('Neutral'),
+                            child: const Text('😐 0'),
                           ),
-                          const Spacer(),
                           TextButton(
                             onPressed: () => updateDraftRating(5, save: true),
-                            child: const Text('+5'),
+                            child: const Text('🔥 +5'),
                           ),
                         ],
                       ),
