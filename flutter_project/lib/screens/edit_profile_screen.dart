@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:io';
 
 import '../providers/user_profile_provider.dart';
+import '../utils/avatar.dart';
 
 class EditProfileScreen extends ConsumerStatefulWidget {
   const EditProfileScreen({super.key});
@@ -112,6 +113,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   Widget build(BuildContext context) {
     final userProfile = ref.watch(userProfileProvider);
     final avatarUrl = userProfile.value?['avatar_url'];
+    final avatarImage = safeNetworkImageProvider(avatarUrl);
 
     return Scaffold(
       appBar: AppBar(title: Text('Edit Profile')),
@@ -127,10 +129,10 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                   children: [
                     CircleAvatar(
                       radius: 50,
-                      backgroundImage: _selectedImage != null 
-                          ? FileImage(_selectedImage!) 
-                          : (avatarUrl != null ? NetworkImage(avatarUrl) : null) as ImageProvider?,
-                      child: (avatarUrl == null && _selectedImage == null) ? Icon(Icons.person, size: 50) : null,
+                      backgroundImage: _selectedImage != null
+                          ? FileImage(_selectedImage!)
+                          : avatarImage,
+                      child: (avatarImage == null && _selectedImage == null) ? Icon(Icons.person, size: 50) : null,
                     ),
                     TextButton.icon(
                       icon: Icon(Icons.camera_alt),

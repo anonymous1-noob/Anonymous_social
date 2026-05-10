@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../providers/user_profile_provider.dart';
 import '../services/follow_service.dart';
+import '../utils/avatar.dart';
 import 'edit_profile_screen.dart';
 import 'login_screen.dart';
 import 'moderator_queue_screen.dart';
@@ -189,14 +190,15 @@ class _ProfileHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final colorScheme = Theme.of(context).colorScheme;
+    final avatarImage = safeNetworkImageProvider(avatarUrl);
 
     return Column(
       children: [
         CircleAvatar(
           radius: 50,
           backgroundColor: colorScheme.surfaceVariant,
-          backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl!) : null,
-          child: avatarUrl == null
+          backgroundImage: avatarImage,
+          child: avatarImage == null
               ? Icon(Icons.person, size: 50, color: colorScheme.onSurfaceVariant)
               : null,
         ),
@@ -506,7 +508,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
           }
 
           final profileId = (profile['id'] ?? '').toString();
-          final avatarUrl = profile['avatar_url'] as String?;
+          final avatarUrl = profile['avatar_url']?.toString();
           final displayName = (profile['display_name'] ?? profile['username'] ?? 'User').toString();
           final tagline = profile['tagline'] as String?;
           final location = profile['location'] as String?;
