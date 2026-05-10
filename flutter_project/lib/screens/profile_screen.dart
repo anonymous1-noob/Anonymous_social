@@ -354,8 +354,12 @@ class _PendingFollowRequestsState extends State<_PendingFollowRequests> {
     _future = FollowService.pendingRequestsForMe();
   }
 
-  void _reload() {
-    setState(() => _future = FollowService.pendingRequestsForMe());
+  Future<List<FollowRequest>> _reload() {
+    final nextFuture = FollowService.pendingRequestsForMe();
+    setState(() {
+      _future = nextFuture;
+    });
+    return nextFuture;
   }
 
   Future<void> _decide(FollowRequest request, bool approve) async {
@@ -456,8 +460,12 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
     _followStatus = status;
   }
 
-  void _reload() {
-    setState(() => _future = _load());
+  Future<void> _reload() {
+    final nextFuture = _load();
+    setState(() {
+      _future = nextFuture;
+    });
+    return nextFuture;
   }
 
   Future<void> _requestFollow(String profileId) async {
@@ -515,7 +523,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
           final postCount = profile['post_count'] ?? 0;
 
           return RefreshIndicator(
-            onRefresh: () async => _reload(),
+            onRefresh: _reload,
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 16.0),
               children: [
