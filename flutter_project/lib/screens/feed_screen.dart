@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -328,12 +329,12 @@ class _FeedScreenState extends State<FeedScreen> {
     return '$prefix${avg.toStringAsFixed(1)} avg • $count ${count == 1 ? 'rating' : 'ratings'}';
   }
 
-  Future<void> _ratePostDelta(String postId, int delta) async {
+  Future<void> _ratePost(String postId, int rating) async {
     final me = await _currentPostRatingUserId();
     if (me == null) return;
 
     final previousRating = _myPostRatings[postId] ?? 0;
-    final nextRating = (previousRating + delta).clamp(-5, 5).toInt();
+    final nextRating = rating.clamp(-5, 5).toInt();
     if (nextRating == previousRating) return;
 
     final hadPreviousRating = _myPostRatings.containsKey(postId);
@@ -721,10 +722,10 @@ class _FeedScreenState extends State<FeedScreen> {
                   ),
                 ],
                 const SizedBox(height: 8),
-            ],
+              ],
+            ),
           ),
-        ),
-      );
+        );
       },
     );
 
@@ -936,25 +937,26 @@ class _FeedScreenState extends State<FeedScreen> {
 
     final time = _timeAgo(createdAt);
 
+    var draftRating = (_myPostRatings[postId] ?? 0).toDouble();
+    var isRatingSliderActive = false;
+    var lastHapticRating = draftRating.round();
+
     return StatefulBuilder(
       builder: (context, setLocal) {
-        final myRating = _myPostRatings[postId] ?? 0;
+        final myRating = draftRating.round();
+        final ratingColor = myRating > 0
+            ? const Color(0xFF16A34A)
+            : (myRating < 0 ? const Color(0xFFDC2626) : const Color(0xFF64748B));
+        final ratingEmoji = myRating > 0 ? '🔥' : (myRating < 0 ? '😕' : '😐');
 
-        return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onHorizontalDragEnd: (details) {
-            final velocity = details.primaryVelocity ?? 0;
-            if (velocity.abs() < 200) return;
-            _ratePostDelta(postId, velocity > 0 ? 1 : -1);
-          },
-          child: Card(
-            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            elevation: 0,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(18),
-              side: BorderSide(color: Colors.grey.shade200),
-            ),
-            child: Column(
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(color: Colors.grey.shade200),
+          ),
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
@@ -1152,30 +1154,58 @@ class _FeedScreenState extends State<FeedScreen> {
               ),
 
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                child: Row(
-                  children: const [
-                    Icon(Icons.swipe_left, size: 16, color: Colors.black45),
-                    SizedBox(width: 4),
-                    Text(
-                      'Swipe left -1',
-                      style: TextStyle(color: Colors.black45, fontSize: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: SizedBox(
+                  height: 32,
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      activeTrackColor: ratingColor,
+                      inactiveTrackColor: const Color(0xFFE2E8F0),
+                      overlayColor: ratingColor.withOpacity(0.14),
+                      thumbColor: ratingColor,
+                      trackHeight: isRatingSliderActive ? 8 : 6,
+                      thumbShape: RoundSliderThumbShape(
+                        enabledThumbRadius: isRatingSliderActive ? 12 : 10,
+                      ),
+                      valueIndicatorColor: ratingColor,
+                      valueIndicatorTextStyle: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
-                    Spacer(),
-                    Text(
-                      'Swipe right +1',
-                      style: TextStyle(color: Colors.black45, fontSize: 12),
+                    child: Slider(
+                      min: -5,
+                      max: 5,
+                      divisions: 10,
+                      value: draftRating,
+                      label: '$ratingEmoji ${_formatSigned(myRating)}',
+                      onChangeStart: (_) {
+                        HapticFeedback.lightImpact();
+                        setLocal(() => isRatingSliderActive = true);
+                      },
+                      onChanged: (value) {
+                        final nextRating = value.round();
+                        if (nextRating != lastHapticRating) {
+                          HapticFeedback.selectionClick();
+                          lastHapticRating = nextRating;
+                        }
+                        setLocal(() => draftRating = nextRating.toDouble());
+                      },
+                      onChangeEnd: (value) {
+                        final nextRating = value.round();
+                        setLocal(() {
+                          draftRating = nextRating.toDouble();
+                          isRatingSliderActive = false;
+                        });
+                        _ratePost(postId, nextRating);
+                      },
                     ),
-                    SizedBox(width: 4),
-                    Icon(Icons.swipe_right, size: 16, color: Colors.black45),
-                  ],
+                  ),
                 ),
               ),
-
             ],
           ),
-        ),
-      );
+        );
       },
     );
   }
