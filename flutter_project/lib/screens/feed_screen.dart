@@ -3,18 +3,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:share_plus/share_plus.dart';
-
-import '../models.dart';
+import 'package:anonymous_social/models.dart';
 import 'notifications_screen.dart';
 import 'edit_post_screen.dart';
-import '../widgets/comments_sheet.dart';
-import '../widgets/report_dialog.dart';
-import '../services/block_service.dart';
-import '../services/saved_posts_service.dart';
-import '../services/poll_service.dart';
-import '../utils/hashtags.dart';
+import 'package:anonymous_social/widgets/comments_sheet.dart';
+import 'package:anonymous_social/widgets/report_dialog.dart';
+import 'package:anonymous_social/services/block_service.dart';
+import 'package:anonymous_social/services/saved_posts_service.dart';
+import 'package:anonymous_social/services/poll_service.dart';
+import 'package:anonymous_social/utils/hashtags.dart';
 import 'tag_posts_screen.dart';
 import 'profile_screen.dart';
+import 'package:anonymous_social/services/edge_rank_service.dart';
+import 'package:anonymous_social/models/post_model.dart';
+import 'package:anonymous_social/models/user_model.dart';
 
 enum FeedSortMode { latest, trending, edgerank }
 
@@ -239,34 +241,6 @@ class _FeedScreenState extends State<FeedScreen> {
       debugPrint('$st');
     }
   }
-
-  double _edgeRankScore(Map<String, dynamic> p) {
-  final pid = (p['id'] ?? '').toString();
-
-  final likes = _postLikeCounts[pid] ?? 0;
-
-  // ✅ FIXED COMMENTS (no extra map needed)
-  final comments =
-      (p['comments'] != null && p['comments'].isNotEmpty)
-          ? p['comments'][0]['count'] ?? 0
-          : 0;
-
-  final createdAt = DateTime.tryParse((p['created_at'] ?? '').toString()) ?? DateTime.now();
-  final hours = DateTime.now().difference(createdAt.toLocal()).inHours;
-
-  final decay = 1 / (1 + (hours / 12));
-
-  final weight = (likes * 1.0) + (comments * 2.0);
-
-  double affinity = 1.0;
-  if (_currentUserId != null && p['user_id'] == _currentUserId) {
-    affinity = 2.0;
-  }
-
-  final random = (DateTime.now().millisecondsSinceEpoch % 1000) / 1000;
-
-  return (affinity * (1 + weight) * decay) + (random * 0.1);
-}
 
   Future<void> _fetchInitialRatings() async {
     final me = await _currentPostRatingUserId();
@@ -1353,6 +1327,35 @@ class _FeedScreenState extends State<FeedScreen> {
                                   })
                                   .toList();
 
+                          // =====================================================
+                          // INJECT RATING + ENGAGEMENT DATA
+                          // =====================================================
+
+                          for (final p in posts) {
+                            final pid = (p['id'] ?? '').toString();
+
+                            final ratingCount = _postRatingCounts[pid] ?? 0;
+
+                            final avgRating = ratingCount == 0
+                                ? 0.0
+                                : (_postRatingSums[pid]! / ratingCount);
+
+                            p['avg_rating'] = avgRating;
+
+                            p['rating_count'] = ratingCount;
+
+                            p['likes_count'] = _postLikeCounts[pid] ?? 0;
+
+                            p['comments_count'] =
+                                commentCountByPost[pid] ?? 0;
+
+                            // Optional defaults
+                            p['shares_count'] ??= 0;
+                            p['bookmarks_count'] ??= 0;
+                            p['dwell_time'] ??= 0.0;
+                            p['report_count'] ??= 0;
+                          }
+
                           // Sorting: Latest vs Trending
                           posts.sort((a, b) {
                             if (_sortMode == FeedSortMode.latest) {
@@ -1361,8 +1364,29 @@ class _FeedScreenState extends State<FeedScreen> {
                               return bT.compareTo(aT);
                             }
                             if (_sortMode == FeedSortMode.edgerank) {
-                              final sB = _edgeRankScore(b);
-                              final sA = _edgeRankScore(a);
+                              final postA = PostModel.fromMap(a);
+                              final postB = PostModel.fromMap(b);
+
+                              // TEMP anonymous users
+                              // Later you can load real profiles
+                              final currentUser = UserModel.anonymous();
+
+                              final authorA = UserModel.anonymous();
+
+                              final authorB = UserModel.anonymous();
+
+                              final sB = EdgeRankService.calculatePostScore(
+                                post: postB,
+                                currentUser: currentUser,
+                                author: authorB,
+                              );
+
+                              final sA = EdgeRankService.calculatePostScore(
+                                post: postA,
+                                currentUser: currentUser,
+                                author: authorA,
+                              );
+
                               return sB.compareTo(sA);
                             }
 
