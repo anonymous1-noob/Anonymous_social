@@ -277,12 +277,46 @@ class _FeedScreenState extends State<FeedScreen> {
     return value.toString();
   }
 
-  String _formatAverageRating(String postId) {
+  double _averageRatingForPost(String postId) {
     final count = _postRatingCounts[postId] ?? 0;
-    if (count == 0) return 'No ratings yet';
-    final avg = (_postRatingSums[postId] ?? 0) / count;
+    if (count == 0) return 0;
+    return (_postRatingSums[postId] ?? 0) / count;
+  }
+
+  String _formatAverageRatingValue(double avg) {
+    if (avg == 0) return '0.0';
     final prefix = avg > 0 ? '+' : '';
-    return '$prefix${avg.toStringAsFixed(1)} avg • $count ${count == 1 ? 'rating' : 'ratings'}';
+    return '$prefix${avg.toStringAsFixed(1)}';
+  }
+
+  String _formatRatingCount(int count) {
+    if (count >= 1000) {
+      final compact = count / 1000;
+      return '${compact.toStringAsFixed(compact >= 10 ? 0 : 1)}k';
+    }
+    return count.toString();
+  }
+
+  Color _ratingToneColor(double avg, int count) {
+    if (count == 0 || avg == 0) return const Color(0xFF64748B);
+    return avg > 0 ? const Color(0xFF15803D) : const Color(0xFFB91C1C);
+  }
+
+  Color _ratingToneBackground(double avg, int count) {
+    if (count == 0 || avg == 0) return const Color(0xFFF8FAFC);
+    return avg > 0 ? const Color(0xFFEFFDF5) : const Color(0xFFFEF2F2);
+  }
+
+  Color _ratingToneBorder(double avg, int count) {
+    if (count == 0 || avg == 0) return const Color(0xFFE2E8F0);
+    return avg > 0 ? const Color(0xFF86EFAC) : const Color(0xFFFCA5A5);
+  }
+
+  IconData _ratingToneIcon(double avg, int count) {
+    if (count == 0) return Icons.auto_awesome_outlined;
+    if (avg > 0) return Icons.trending_up;
+    if (avg < 0) return Icons.trending_down;
+    return Icons.balance_outlined;
   }
 
   Future<void> _ratePost(String postId, int rating) async {
@@ -842,6 +876,11 @@ class _FeedScreenState extends State<FeedScreen> {
             ? const Color(0xFF16A34A)
             : (myRating < 0 ? const Color(0xFFDC2626) : const Color(0xFF64748B));
         final ratingEmoji = myRating > 0 ? '🔥' : (myRating < 0 ? '😕' : '😐');
+        final ratingCount = _postRatingCounts[postId] ?? 0;
+        final avgRating = _averageRatingForPost(postId);
+        final avgToneColor = _ratingToneColor(avgRating, ratingCount);
+        final avgToneBackground = _ratingToneBackground(avgRating, ratingCount);
+        final avgToneBorder = _ratingToneBorder(avgRating, ratingCount);
 
         return Card(
           margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -972,48 +1011,68 @@ class _FeedScreenState extends State<FeedScreen> {
                         crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                             decoration: BoxDecoration(
-                              color: myRating == 0
-                                  ? const Color(0xFFF3F4F6)
-                                  : (myRating > 0
-                                      ? const Color(0xFFEFFDF5)
-                                      : const Color(0xFFFEF2F2)),
+                              color: avgToneBackground,
                               borderRadius: BorderRadius.circular(999),
-                              border: Border.all(
-                                color: myRating == 0
-                                    ? const Color(0xFFE5E7EB)
-                                    : (myRating > 0
-                                        ? const Color(0xFF86EFAC)
-                                        : const Color(0xFFFCA5A5)),
-                              ),
+                              border: Border.all(color: avgToneBorder),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Color(0x0D000000),
+                                  blurRadius: 8,
+                                  offset: Offset(0, 2),
+                                ),
+                              ],
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Icon(
-                                  myRating > 0
-                                      ? Icons.trending_up
-                                      : (myRating < 0 ? Icons.trending_down : Icons.swipe),
+                                  _ratingToneIcon(avgRating, ratingCount),
                                   size: 16,
-                                  color: myRating > 0
-                                      ? const Color(0xFF15803D)
-                                      : (myRating < 0 ? const Color(0xFFB91C1C) : Colors.black54),
+                                  color: avgToneColor,
                                 ),
-                                const SizedBox(width: 5),
+                                const SizedBox(width: 6),
                                 Text(
-                                  'Your rate ${_formatSigned(myRating)}',
-                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
+                                  ratingCount == 0
+                                      ? 'New rating'
+                                      : '${_formatAverageRatingValue(avgRating)} avg',
+                                  style: TextStyle(
+                                    color: avgToneColor,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w900,
+                                  ),
                                 ),
                               ],
                             ),
                           ),
-                          Text(
-                            _formatAverageRating(postId),
-                            style: const TextStyle(
-                              color: Colors.black54,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF8FAFC),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(color: const Color(0xFFE2E8F0)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.groups_2_outlined,
+                                  size: 15,
+                                  color: Color(0xFF64748B),
+                                ),
+                                const SizedBox(width: 5),
+                                Text(
+                                  ratingCount == 0
+                                      ? 'Be first'
+                                      : '${_formatRatingCount(ratingCount)} ${ratingCount == 1 ? 'rating' : 'ratings'}',
+                                  style: const TextStyle(
+                                    color: Color(0xFF475569),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
