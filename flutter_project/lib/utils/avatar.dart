@@ -25,3 +25,14 @@ class AnonymousAvatar {
            "${nouns[r.nextInt(nouns.length)]}";
   }
 }
+ImageProvider? safeNetworkImageProvider(dynamic url) {
+  final value = url?.toString().trim() ?? '';
+  if (value.isEmpty) return null;
+
+  final uri = Uri.tryParse(value);
+  final hasValidHost = uri != null && uri.hasScheme && uri.host.isNotEmpty;
+  final isNetworkScheme = uri?.scheme == 'http' || uri?.scheme == 'https';
+
+  if (!hasValidHost || !isNetworkScheme) return null;
+  return NetworkImage(value);
+}

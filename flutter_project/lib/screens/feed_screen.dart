@@ -13,6 +13,7 @@ import 'package:anonymous_social/services/saved_posts_service.dart';
 import 'package:anonymous_social/services/poll_service.dart';
 import 'package:anonymous_social/utils/hashtags.dart';
 import 'tag_posts_screen.dart';
+import 'profile_screen.dart';
 import 'package:anonymous_social/services/edge_rank_service.dart';
 import 'package:anonymous_social/models/post_model.dart';
 import 'package:anonymous_social/models/user_model.dart';
@@ -937,17 +938,29 @@ class _FeedScreenState extends State<FeedScreen> {
                 padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
                 child: Row(
                   children: [
-                    Container(
-                      width: 38,
-                      height: 38,
-                      decoration: BoxDecoration(color: avatarColor, shape: BoxShape.circle),
-                      alignment: Alignment.center,
-                      child: Text(
-                        _initials(name),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 16,
+                    InkWell(
+                      onTap: authorId.isEmpty
+                          ? null
+                          : () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => PublicProfileScreen(userId: authorId),
+                                ),
+                              );
+                            },
+                      customBorder: const CircleBorder(),
+                      child: Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(color: avatarColor, shape: BoxShape.circle),
+                        alignment: Alignment.center,
+                        child: Text(
+                          _initials(name),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16,
+                          ),
                         ),
                       ),
                     ),
