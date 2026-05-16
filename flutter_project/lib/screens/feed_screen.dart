@@ -15,10 +15,13 @@ import 'package:anonymous_social/utils/hashtags.dart';
 import 'tag_posts_screen.dart';
 import 'profile_screen.dart';
 import 'package:anonymous_social/services/edge_rank_service.dart';
+import 'package:anonymous_social/services/local_prefs.dart';
 import 'package:anonymous_social/models/post_model.dart';
 import 'package:anonymous_social/models/user_model.dart';
 
 enum FeedSortMode { latest, trending, edgerank }
+
+const _ratingCoachmarkSeenKey = 'rating_slider_coachmark_seen_v1';
 
 class FeedScreen extends StatefulWidget {
   final int categoryId;
@@ -90,6 +93,10 @@ class _FeedScreenState extends State<FeedScreen> {
     _fetchInitialSaved();
     _fetchInitialRatings();
 
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeShowRatingCoachmark();
+    });
+
     _loadBlockedUsers();
     _loadCategoryName();
   }
@@ -129,6 +136,22 @@ class _FeedScreenState extends State<FeedScreen> {
       if (!mounted) return;
       setState(() => _categoryName = 'Category');
     }
+  }
+
+  Future<void> _maybeShowRatingCoachmark() async {
+    final prefs = await LocalPrefs.instance();
+    final hasSeenCoachmark = prefs.getBool(_ratingCoachmarkSeenKey) ?? false;
+    if (hasSeenCoachmark || !mounted) return;
+
+    await prefs.setBool(_ratingCoachmarkSeenKey, true);
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Tip: slide 😕 left or 🔥 right to rate a post.'),
+        duration: Duration(seconds: 5),
+      ),
+    );
   }
 
   @override
@@ -1141,53 +1164,86 @@ class _FeedScreenState extends State<FeedScreen> {
               ),
 
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: SizedBox(
-                  height: 32,
-                  child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      activeTrackColor: ratingColor,
-                      inactiveTrackColor: const Color(0xFFE2E8F0),
-                      overlayColor: ratingColor.withOpacity(0.14),
-                      thumbColor: ratingColor,
-                      trackHeight: isRatingSliderActive ? 8 : 6,
-                      thumbShape: RoundSliderThumbShape(
-                        enabledThumbRadius: isRatingSliderActive ? 12 : 10,
+                padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                child: Row(
+                  children: [
+                    const Text(
+                      'Rate this post',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
                       ),
-                      valueIndicatorColor: ratingColor,
-                      valueIndicatorTextStyle: const TextStyle(
-                        color: Colors.white,
+                    ),
+                    const Spacer(),
+                    Text(
+                      '$ratingEmoji ${_formatSigned(myRating)}',
+                      style: TextStyle(
+                        color: ratingColor,
+                        fontSize: 12,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
-                    child: Slider(
-                      min: -5,
-                      max: 5,
-                      divisions: 10,
-                      value: draftRating,
-                      label: '$ratingEmoji ${_formatSigned(myRating)}',
-                      onChangeStart: (_) {
-                        HapticFeedback.lightImpact();
-                        setLocal(() => isRatingSliderActive = true);
-                      },
-                      onChanged: (value) {
-                        final nextRating = value.round();
-                        if (nextRating != lastHapticRating) {
-                          HapticFeedback.selectionClick();
-                          lastHapticRating = nextRating;
-                        }
-                        setLocal(() => draftRating = nextRating.toDouble());
-                      },
-                      onChangeEnd: (value) {
-                        final nextRating = value.round();
-                        setLocal(() {
-                          draftRating = nextRating.toDouble();
-                          isRatingSliderActive = false;
-                        });
-                        _ratePost(postId, nextRating);
-                      },
+                  ],
+                ),
+              ),
+
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Row(
+                  children: [
+                    const Text('😕', style: TextStyle(fontSize: 16)),
+                    Expanded(
+                      child: SizedBox(
+                        height: 32,
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            activeTrackColor: ratingColor,
+                            inactiveTrackColor: const Color(0xFFE2E8F0),
+                            overlayColor: ratingColor.withOpacity(0.14),
+                            thumbColor: ratingColor,
+                            trackHeight: isRatingSliderActive ? 8 : 6,
+                            thumbShape: RoundSliderThumbShape(
+                              enabledThumbRadius:
+                                  isRatingSliderActive ? 12 : 10,
+                            ),
+                            valueIndicatorColor: ratingColor,
+                            valueIndicatorTextStyle: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          child: Slider(
+                            min: -5,
+                            max: 5,
+                            divisions: 10,
+                            value: draftRating,
+                            label: '$ratingEmoji ${_formatSigned(myRating)}',
+                            onChangeStart: (_) {
+                              HapticFeedback.lightImpact();
+                              setLocal(() => isRatingSliderActive = true);
+                            },
+                            onChanged: (value) {
+                              final nextRating = value.round();
+                              if (nextRating != lastHapticRating) {
+                                HapticFeedback.selectionClick();
+                                lastHapticRating = nextRating;
+                              }
+                              setLocal(() => draftRating = nextRating.toDouble());
+                            },
+                            onChangeEnd: (value) {
+                              final nextRating = value.round();
+                              setLocal(() {
+                                draftRating = nextRating.toDouble();
+                                isRatingSliderActive = false;
+                              });
+                              _ratePost(postId, nextRating);
+                            },
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
+                    const Text('🔥', style: TextStyle(fontSize: 16)),
+                  ],
                 ),
               ),
             ],
