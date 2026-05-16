@@ -319,14 +319,6 @@ class _FeedScreenState extends State<FeedScreen> {
     return value.toString();
   }
 
-  String _formatAverageRating(String postId) {
-    final count = _postRatingCounts[postId] ?? 0;
-    if (count == 0) return 'No ratings yet';
-    final avg = (_postRatingSums[postId] ?? 0) / count;
-    final prefix = avg > 0 ? '+' : '';
-    return '$prefix${avg.toStringAsFixed(1)} avg • $count ${count == 1 ? 'rating' : 'ratings'}';
-  }
-
   Future<void> _ratePost(String postId, int rating) async {
     final me = await _currentPostRatingUserId();
     if (me == null) return;
@@ -925,7 +917,6 @@ class _FeedScreenState extends State<FeedScreen> {
         authorId.isNotEmpty ? _avatarColorForUser(authorId) : const Color(0xFF94A3B8);
 
     final isLiked = _likedPostIds.contains(postId);
-    final likeCount = _postLikeCounts[postId] ?? 0;
 
     final isSaved = _savedPostIds.contains(postId);
 
@@ -1020,67 +1011,6 @@ class _FeedScreenState extends State<FeedScreen> {
                       icon: const Icon(Icons.more_horiz),
                       splashRadius: 18,
                       onPressed: () => _showPostMenu(post),
-                    ),
-                  ],
-                ),
-              ),
-
-              Padding(
-                padding: const EdgeInsets.only(left: 12, right: 12, top: 2),
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    if (likeCount > 0)
-                      Text(
-                        '$likeCount likes',
-                        style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: myRating == 0
-                            ? const Color(0xFFF3F4F6)
-                            : (myRating > 0
-                                ? const Color(0xFFEFFDF5)
-                                : const Color(0xFFFEF2F2)),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                          color: myRating == 0
-                              ? const Color(0xFFE5E7EB)
-                              : (myRating > 0
-                                  ? const Color(0xFF86EFAC)
-                                  : const Color(0xFFFCA5A5)),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            myRating > 0
-                                ? Icons.trending_up
-                                : (myRating < 0 ? Icons.trending_down : Icons.swipe),
-                            size: 16,
-                            color: myRating > 0
-                                ? const Color(0xFF15803D)
-                                : (myRating < 0 ? const Color(0xFFB91C1C) : Colors.black54),
-                          ),
-                          const SizedBox(width: 5),
-                          Text(
-                            'Your rate ${_formatSigned(myRating)}',
-                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Text(
-                      _formatAverageRating(postId),
-                      style: const TextStyle(
-                        color: Colors.black54,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
                     ),
                   ],
                 ),
