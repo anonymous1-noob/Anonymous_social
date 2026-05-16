@@ -40,9 +40,6 @@ class _FeedScreenState extends State<FeedScreen> {
   String? _ratingUserId;
   StreamSubscription<AuthState>? _authSub;
 
-  // Like cache for posts (optimistic feel)
-  final Set<String> _likedPostIds = {};
-  final Map<String, int> _postLikeCounts = {};
   final Map<String, int> commentCountByPost = {};
 
   // Rating cache for swipe-based post scores (-5 to +5).
@@ -84,12 +81,10 @@ class _FeedScreenState extends State<FeedScreen> {
         _currentUserId = user?.id;
         _ratingUserId = null;
       });
-      _fetchInitialLikes();
       _fetchInitialSaved();
       _fetchInitialRatings();
     });
 
-    _fetchInitialLikes();
     _fetchInitialSaved();
     _fetchInitialRatings();
 
@@ -227,43 +222,6 @@ class _FeedScreenState extends State<FeedScreen> {
     return authId;
   }
 
-
-  // ✅ FIX: table name is post_likes (not posts_likes)
-  Future<void> _fetchInitialLikes() async {
-    final me = _currentUserId;
-    if (me == null) return;
-
-    try {
-      final likes = await supabase.from('post_likes').select('post_id, user_id');
-
-      final Set<String> liked = {};
-      final Map<String, int> counts = {};
-
-      for (final row in likes) {
-        final pid = (row['post_id'] ?? '').toString();
-        if (pid.isEmpty) continue;
-
-        counts[pid] = (counts[pid] ?? 0) + 1;
-
-        final uid = (row['user_id'] ?? '').toString();
-        if (uid == me) liked.add(pid);
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _likedPostIds
-          ..clear()
-          ..addAll(liked);
-
-        _postLikeCounts
-          ..clear()
-          ..addAll(counts);
-      });
-    } catch (e, st) {
-      debugPrint('FETCH LIKES ERROR: $e');
-      debugPrint('$st');
-    }
-  }
 
   Future<void> _fetchInitialRatings() async {
     final me = await _currentPostRatingUserId();
@@ -517,63 +475,6 @@ class _FeedScreenState extends State<FeedScreen> {
     );
   }
 
-  // ✅ FIX: table name is post_likes (not posts_likes)
-  Future<void> _togglePostLike(String postId) async {
-    final me = _currentUserId;
-    if (me == null) return;
-
-    final wasLiked = _likedPostIds.contains(postId);
-
-    // Optimistic update
-    setState(() {
-      if (wasLiked) {
-        _likedPostIds.remove(postId);
-        final current = _postLikeCounts[postId] ?? 0;
-        _postLikeCounts[postId] = (current - 1).clamp(0, 1 << 30);
-      } else {
-        _likedPostIds.add(postId);
-        final current = _postLikeCounts[postId] ?? 0;
-        _postLikeCounts[postId] = current + 1;
-      }
-    });
-
-    try {
-      if (wasLiked) {
-        await supabase.from('post_likes').delete().match({
-          'post_id': postId,
-          'user_id': me,
-        });
-      } else {
-        // Uses upsert so duplicate likes don't throw
-        await supabase.from('post_likes').upsert(
-          {'post_id': postId, 'user_id': me},
-          onConflict: 'post_id,user_id',
-        );
-      }
-    } catch (e, st) {
-      debugPrint('LIKE TOGGLE ERROR: $e');
-      debugPrint('$st');
-
-      // Revert UI if backend failed
-      if (!mounted) return;
-      setState(() {
-        if (wasLiked) {
-          _likedPostIds.add(postId);
-          final current = _postLikeCounts[postId] ?? 0;
-          _postLikeCounts[postId] = current + 1;
-        } else {
-          _likedPostIds.remove(postId);
-          final current = _postLikeCounts[postId] ?? 0;
-          _postLikeCounts[postId] = (current - 1).clamp(0, 1 << 30);
-        }
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Like failed: $e')),
-      );
-    }
-  }
-
   Future<void> _loadIdentitiesForUsers(Set<String> userIds) async {
     if (_loadingIdentities) return;
     final missing = userIds.where((u) => !_identityByUser.containsKey(u)).toList();
@@ -746,14 +647,12 @@ class _FeedScreenState extends State<FeedScreen> {
       final createdAtRaw = post['created_at'];
       final createdAt = DateTime.tryParse(createdAtRaw?.toString() ?? '') ?? DateTime.now();
       final mediaUrl = (post['media_url'] ?? '').toString().trim();
-      final likes = _postLikeCounts[postId] ?? 0;
-
       final postObj = Post(
         id: postId,
         content: content,
         anonymousName: 'Anonymous',
         impressions: 0,
-        likes: likes,
+        likes: 0,
         createdAt: createdAt,
         mediaUrl: mediaUrl.isEmpty ? null : mediaUrl,
       );
@@ -798,7 +697,7 @@ class _FeedScreenState extends State<FeedScreen> {
           const SizedBox(height: 12),
           _sidebarItem(icon: Icons.settings_outlined, label: "Settings", onTap: () {}),
           const Spacer(),
-          const Text("Tip: Tap ❤️ to like, 💬 to comment.",
+          const Text("Tip: Slide 😕 or 🔥 to rate, 💬 to comment.",
               style: TextStyle(color: Colors.black54, fontSize: 12)),
         ],
       ),
@@ -924,9 +823,6 @@ class _FeedScreenState extends State<FeedScreen> {
     final avatarColor =
         authorId.isNotEmpty ? _avatarColorForUser(authorId) : const Color(0xFF94A3B8);
 
-    final isLiked = _likedPostIds.contains(postId);
-    final likeCount = _postLikeCounts[postId] ?? 0;
-
     final isSaved = _savedPostIds.contains(postId);
 
     final commentCount = commentCountByPost[postId] ?? 0;
@@ -1025,66 +921,6 @@ class _FeedScreenState extends State<FeedScreen> {
                 ),
               ),
 
-              Padding(
-                padding: const EdgeInsets.only(left: 12, right: 12, top: 2),
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    if (likeCount > 0)
-                      Text(
-                        '$likeCount likes',
-                        style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: myRating == 0
-                            ? const Color(0xFFF3F4F6)
-                            : (myRating > 0
-                                ? const Color(0xFFEFFDF5)
-                                : const Color(0xFFFEF2F2)),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                          color: myRating == 0
-                              ? const Color(0xFFE5E7EB)
-                              : (myRating > 0
-                                  ? const Color(0xFF86EFAC)
-                                  : const Color(0xFFFCA5A5)),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            myRating > 0
-                                ? Icons.trending_up
-                                : (myRating < 0 ? Icons.trending_down : Icons.swipe),
-                            size: 16,
-                            color: myRating > 0
-                                ? const Color(0xFF15803D)
-                                : (myRating < 0 ? const Color(0xFFB91C1C) : Colors.black54),
-                          ),
-                          const SizedBox(width: 5),
-                          Text(
-                            'Your rate ${_formatSigned(myRating)}',
-                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Text(
-                      _formatAverageRating(postId),
-                      style: const TextStyle(
-                        color: Colors.black54,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
 
               if (content.trim().isNotEmpty) ...[
                 const SizedBox(height: 6),
@@ -1126,15 +962,61 @@ class _FeedScreenState extends State<FeedScreen> {
               ],
 
               Padding(
-                padding: const EdgeInsets.fromLTRB(6, 8, 6, 0),
+                padding: const EdgeInsets.fromLTRB(8, 8, 6, 0),
                 child: Row(
                   children: [
-                    IconButton(
-                      splashRadius: 20,
-                      onPressed: () => _togglePostLike(postId),
-                      icon: Icon(
-                        isLiked ? Icons.favorite : Icons.favorite_border,
-                        color: isLiked ? Colors.redAccent : Colors.black87,
+                    Expanded(
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: myRating == 0
+                                  ? const Color(0xFFF3F4F6)
+                                  : (myRating > 0
+                                      ? const Color(0xFFEFFDF5)
+                                      : const Color(0xFFFEF2F2)),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                color: myRating == 0
+                                    ? const Color(0xFFE5E7EB)
+                                    : (myRating > 0
+                                        ? const Color(0xFF86EFAC)
+                                        : const Color(0xFFFCA5A5)),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  myRating > 0
+                                      ? Icons.trending_up
+                                      : (myRating < 0 ? Icons.trending_down : Icons.swipe),
+                                  size: 16,
+                                  color: myRating > 0
+                                      ? const Color(0xFF15803D)
+                                      : (myRating < 0 ? const Color(0xFFB91C1C) : Colors.black54),
+                                ),
+                                const SizedBox(width: 5),
+                                Text(
+                                  'Your rate ${_formatSigned(myRating)}',
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Text(
+                            _formatAverageRating(postId),
+                            style: const TextStyle(
+                              color: Colors.black54,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     IconButton(
@@ -1153,7 +1035,6 @@ class _FeedScreenState extends State<FeedScreen> {
                       onPressed: () => _sharePost(postId: postId),
                       icon: const Icon(Icons.send_outlined),
                     ),
-                    const Spacer(),
                     IconButton(
                       splashRadius: 20,
                       onPressed: () => _toggleSaved(postId),
@@ -1271,7 +1152,6 @@ class _FeedScreenState extends State<FeedScreen> {
             .stream(primaryKey: ['post_id', 'category_id'])
             .eq('category_id', widget.categoryId);
     final commentsStream = supabase.from('comments').stream(primaryKey: ['id']);
-    final commentLikesStream = supabase.from('comment_likes').stream(primaryKey: ['id']);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1306,7 +1186,6 @@ class _FeedScreenState extends State<FeedScreen> {
                   onRefresh: () async {
                     setState(() => _refreshing = true);
                     await Future.delayed(const Duration(milliseconds: 350));
-                    await _fetchInitialLikes();
                     await _fetchInitialRatings();
                     if (mounted) setState(() => _refreshing = false);
                   },
@@ -1400,7 +1279,7 @@ class _FeedScreenState extends State<FeedScreen> {
 
                             p['rating_count'] = ratingCount;
 
-                            p['likes_count'] = _postLikeCounts[pid] ?? 0;
+                            p['likes_count'] = 0;
 
                             p['comments_count'] =
                                 commentCountByPost[pid] ?? 0;
@@ -1448,14 +1327,16 @@ class _FeedScreenState extends State<FeedScreen> {
 
                             double score(Map<String, dynamic> p) {
                               final pid = (p['id'] ?? '').toString();
-                              final likes = _postLikeCounts[pid] ?? 0;
+                              final ratingCount = _postRatingCounts[pid] ?? 0;
+                              final ratingSum = _postRatingSums[pid] ?? 0;
+                              final avgRating = ratingCount == 0 ? 0.0 : ratingSum / ratingCount;
                               final comments = commentCountByPost[pid] ?? 0;
 
                               final createdAt = DateTime.tryParse((p['created_at'] ?? '').toString()) ?? DateTime.now();
                               final ageHrs = DateTime.now().difference(createdAt.toLocal()).inMinutes / 60.0;
 
-                              // Simple Reddit-like hot score: engagement / time.
-                              final engagement = (likes * 2) + (comments * 3);
+                              // Trending now uses post ratings instead of post likes.
+                              final engagement = (avgRating * ratingCount) + (comments * 3);
                               final denom = (ageHrs + 2.0);
                               return engagement / denom;
                             }
@@ -1493,9 +1374,6 @@ class _FeedScreenState extends State<FeedScreen> {
                               ],
                             );
                           }
-
-                          // Load like cache once per build tick is OK, but avoid loops:
-                          // We already do it on init and refresh.
 
                               return Center(
                                 child: ConstrainedBox(
