@@ -756,21 +756,18 @@ class _FeedScreenState extends State<FeedScreen> {
   }
 
   Widget _captionText({
-    required String username,
     required String caption,
     required bool expanded,
     required VoidCallback onToggle,
   }) {
-    final full = '$username $caption';
-    final shouldCollapse = full.length > 140;
+    final shouldCollapse = caption.length > 140;
 
     if (!shouldCollapse) {
       return RichText(
         text: TextSpan(
           style: const TextStyle(color: Colors.black, height: 1.25),
           children: [
-            TextSpan(text: username, style: const TextStyle(fontWeight: FontWeight.w800)),
-            ..._buildHashtagSpans(' $caption'),
+            ..._buildHashtagSpans(caption),
           ],
         ),
       );
@@ -784,8 +781,7 @@ class _FeedScreenState extends State<FeedScreen> {
             text: TextSpan(
               style: const TextStyle(color: Colors.black, height: 1.25),
               children: [
-                TextSpan(text: username, style: const TextStyle(fontWeight: FontWeight.w800)),
-                ..._buildHashtagSpans(' $caption'),
+                ..._buildHashtagSpans(caption),
               ],
             ),
           ),
@@ -807,8 +803,7 @@ class _FeedScreenState extends State<FeedScreen> {
           text: TextSpan(
             style: const TextStyle(color: Colors.black, height: 1.25),
             children: [
-              TextSpan(text: username, style: const TextStyle(fontWeight: FontWeight.w800)),
-              ..._buildHashtagSpans(' $shortCaption '),
+              ..._buildHashtagSpans('$shortCaption '),
               const TextSpan(
                 text: 'more',
                 style: TextStyle(color: Colors.black54, fontWeight: FontWeight.w700),
@@ -968,7 +963,6 @@ class _FeedScreenState extends State<FeedScreen> {
                   child: GestureDetector(
                     onTap: () => setLocal(() => expanded = !expanded),
                     child: _captionText(
-                      username: name,
                       caption: content,
                       expanded: expanded,
                       onToggle: () => setLocal(() => expanded = !expanded),
