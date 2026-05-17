@@ -17,6 +17,8 @@ dependencies:
   flutter_riverpod: ^2.5.1 # Added flutter_riverpod
   shared_preferences: ^2.2.3
   share_plus: ^10.0.2
+  integration_test:
+    sdk: flutter
 
 dev_dependencies:
   flutter_test:
