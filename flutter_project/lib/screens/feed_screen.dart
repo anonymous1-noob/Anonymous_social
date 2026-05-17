@@ -36,10 +36,13 @@ class _FeedScreenState extends State<FeedScreen> {
   final supabase = Supabase.instance.client;
 
   // Current user
+  bool _refreshing = false;
   String? _currentUserId;
   String? _ratingUserId;
   StreamSubscription<AuthState>? _authSub;
 
+  List<Map<String, dynamic>> _cachedSortedPosts = [];
+  bool _hasCachedPosts = false;
   final Map<String, int> commentCountByPost = {};
 
   // Rating cache for swipe-based post scores (-5 to +5).
@@ -49,9 +52,6 @@ class _FeedScreenState extends State<FeedScreen> {
 
   // Saved posts
   final Set<String> _savedPostIds = {};
-
-
-  bool _refreshing = false;
   bool _ensuredMyIdentity = false;
 
   // Identity cache
@@ -1240,11 +1240,25 @@ class _FeedScreenState extends State<FeedScreen> {
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () async {
-                    setState(() => _refreshing = true);
-                    await Future.delayed(const Duration(milliseconds: 350));
-                    await _fetchInitialRatings();
-                    if (mounted) setState(() => _refreshing = false);
-                  },
+                  setState(() {
+                    _refreshing = true;
+
+                    // FORCE RE-SORT
+                    _hasCachedPosts = false;
+                  });
+
+                  await _fetchInitialRatings();
+
+                  await Future.delayed(
+                    const Duration(milliseconds: 400),
+                  );
+
+                  if (mounted) {
+                    setState(() {
+                      _refreshing = false;
+                    });
+                  }
+                },
                   child: StreamBuilder<List<Map<String, dynamic>>>(
                     stream: commentsStream,
                     builder: (context, commentsSnap) {
@@ -1347,64 +1361,126 @@ class _FeedScreenState extends State<FeedScreen> {
                             p['report_count'] ??= 0;
                           }
 
-                          // Sorting: Latest vs Trending
-                          posts.sort((a, b) {
-                            if (_sortMode == FeedSortMode.latest) {
+                          // =====================================================
+                          // FEED SORTING
+                          // Only re-sort when manually refreshing
+                          // =====================================================
+
+                          if (_refreshing || !_hasCachedPosts) {
+
+                            posts.sort((a, b) {
+
+                              if (_sortMode == FeedSortMode.latest) {
+                                final aT = (a['created_at'] ?? '').toString();
+                                final bT = (b['created_at'] ?? '').toString();
+                                return bT.compareTo(aT);
+                              }
+
+                              if (_sortMode == FeedSortMode.edgerank) {
+
+                                final postA = PostModel.fromMap(a);
+                                final postB = PostModel.fromMap(b);
+
+                                final currentUser = UserModel.anonymous();
+
+                                final authorA = UserModel.anonymous();
+                                final authorB = UserModel.anonymous();
+
+                                final sB = EdgeRankService.calculatePostScore(
+                                  post: postB,
+                                  currentUser: currentUser,
+                                  author: authorB,
+                                );
+
+                                final sA = EdgeRankService.calculatePostScore(
+                                  post: postA,
+                                  currentUser: currentUser,
+                                  author: authorA,
+                                );
+
+                                return sB.compareTo(sA);
+                              }
+
+                              // Trending
+                              double score(Map<String, dynamic> p) {
+
+                                final pid = (p['id'] ?? '').toString();
+
+                                final ratingCount = _postRatingCounts[pid] ?? 0;
+                                final ratingSum = _postRatingSums[pid] ?? 0;
+
+                                final avgRating =
+                                    ratingCount == 0 ? 0.0 : ratingSum / ratingCount;
+
+                                final comments = commentCountByPost[pid] ?? 0;
+
+                                final createdAt = DateTime.tryParse(
+                                      (p['created_at'] ?? '').toString(),
+                                    ) ??
+                                    DateTime.now();
+
+                                final ageHrs =
+                                    DateTime.now().difference(createdAt.toLocal()).inMinutes / 60.0;
+
+                                final engagement =
+                                    (avgRating * ratingCount) + (comments * 3);
+
+                                final denom = (ageHrs + 2.0);
+
+                                return engagement / denom;
+                              }
+
+                              final sB = score(b);
+                              final sA = score(a);
+
+                              final cmp = sB.compareTo(sA);
+
+                              if (cmp != 0) return cmp;
+
                               final aT = (a['created_at'] ?? '').toString();
                               final bT = (b['created_at'] ?? '').toString();
+
                               return bT.compareTo(aT);
-                            }
-                            if (_sortMode == FeedSortMode.edgerank) {
-                              final postA = PostModel.fromMap(a);
-                              final postB = PostModel.fromMap(b);
+                            });
 
-                              // TEMP anonymous users
-                              // Later you can load real profiles
-                              final currentUser = UserModel.anonymous();
+                            // SAVE SORTED ORDER
+                            _cachedSortedPosts = List<Map<String, dynamic>>.from(posts);
 
-                              final authorA = UserModel.anonymous();
+                            _hasCachedPosts = true;
 
-                              final authorB = UserModel.anonymous();
+                          } else {
 
-                              final sB = EdgeRankService.calculatePostScore(
-                                post: postB,
-                                currentUser: currentUser,
-                                author: authorB,
-                              );
+                            // =====================================================
+                            // KEEP OLD ORDER
+                            // ONLY UPDATE CONTENT
+                            // =====================================================
 
-                              final sA = EdgeRankService.calculatePostScore(
-                                post: postA,
-                                currentUser: currentUser,
-                                author: authorA,
-                              );
+                            final Map<String, Map<String, dynamic>> latestMap = {
+                              for (final p in posts)
+                                (p['id'] ?? '').toString(): p,
+                            };
 
-                              return sB.compareTo(sA);
-                            }
+                            final List<Map<String, dynamic>> stablePosts = [];
 
-                            double score(Map<String, dynamic> p) {
-                              final pid = (p['id'] ?? '').toString();
-                              final ratingCount = _postRatingCounts[pid] ?? 0;
-                              final ratingSum = _postRatingSums[pid] ?? 0;
-                              final avgRating = ratingCount == 0 ? 0.0 : ratingSum / ratingCount;
-                              final comments = commentCountByPost[pid] ?? 0;
+                            for (final oldPost in _cachedSortedPosts) {
 
-                              final createdAt = DateTime.tryParse((p['created_at'] ?? '').toString()) ?? DateTime.now();
-                              final ageHrs = DateTime.now().difference(createdAt.toLocal()).inMinutes / 60.0;
+                              final pid = (oldPost['id'] ?? '').toString();
 
-                              // Trending now uses post ratings instead of post likes.
-                              final engagement = (avgRating * ratingCount) + (comments * 3);
-                              final denom = (ageHrs + 2.0);
-                              return engagement / denom;
+                              if (latestMap.containsKey(pid)) {
+                                stablePosts.add(latestMap[pid]!);
+                                latestMap.remove(pid);
+                              }
                             }
 
-                            final sB = score(b);
-                            final sA = score(a);
-                            final cmp = sB.compareTo(sA);
-                            if (cmp != 0) return cmp;
-                            final aT = (a['created_at'] ?? '').toString();
-                            final bT = (b['created_at'] ?? '').toString();
-                            return bT.compareTo(aT);
-                          });
+                            // Append new posts at top
+                            final newPosts = latestMap.values.toList();
+
+                            stablePosts.insertAll(0, newPosts);
+
+                            posts
+                              ..clear()
+                              ..addAll(stablePosts);
+                          }
 
                           if (posts.isEmpty) {
                             return ListView(
@@ -1450,10 +1526,29 @@ class _FeedScreenState extends State<FeedScreen> {
                                                 ButtonSegment(value: FeedSortMode.edgerank, label: Text('For You')), // 🔥 ADD THIS
                                               ],
                                               selected: <FeedSortMode>{_sortMode},
-                                              onSelectionChanged: (v) {
-                                                if (v.isEmpty) return;
-                                                setState(() => _sortMode = v.first);
-                                              },
+                                              onSelectionChanged: (v) async {
+                                              if (v.isEmpty) return;
+                                              final selected = v.first;
+                                              setState(() {
+                                                _sortMode = selected;
+                                                // FORCE REFRESH + RE-SORT
+                                                _hasCachedPosts = false;
+                                                _refreshing = true;
+                                              });
+
+                                              // Reload ratings before sorting
+                                              await _fetchInitialRatings();
+
+                                              await Future.delayed(
+                                                const Duration(milliseconds: 300),
+                                              );
+
+                                              if (mounted) {
+                                                setState(() {
+                                                  _refreshing = false;
+                                                });
+                                              }
+                                            },
                                               style: const ButtonStyle(
                                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                                 visualDensity: VisualDensity.compact,
